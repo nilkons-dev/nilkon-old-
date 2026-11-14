@@ -373,6 +373,10 @@ class OnlinePage(QWidget):
         self.stack.setCurrentIndex(0)
         self.list.scrollToTop()
 
+    def show_skeleton(self):
+        self.shelves.set_loading()
+        self.stack.setCurrentIndex(2)
+
     def set_shelves(self, shelves):
         """The idle state of the page: rows of suggested songs (Spotify style)."""
         if not shelves:

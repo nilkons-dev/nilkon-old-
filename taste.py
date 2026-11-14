@@ -14,7 +14,7 @@ import random
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait as _futures_wait
 from pathlib import Path
 
 CURATED = [
@@ -342,9 +342,12 @@ class Taste:
                 mix_box["items"], mix_box["label"] = [], "Made for you"
         t = threading.Thread(target=mix, daemon=True)
         t.start()
-        with ThreadPoolExecutor(max_workers=min(5, max(1, len(specs)))) as pool:
-            lists = list(pool.map(run, specs))
-        t.join(timeout=40)
+        pool = ThreadPoolExecutor(max_workers=max(1, len(specs)))
+        futs = [pool.submit(run, sp) for sp in specs]
+        _futures_wait(futs, timeout=9.0)                   # a slow row must not hold the others back
+        lists = [f.result() if f.done() else [] for f in futs]
+        pool.shutdown(wait=False, cancel_futures=True)
+        t.join(timeout=max(0.1, 10.0))
         taken, sigs = set(), set()
         shelves = []
 

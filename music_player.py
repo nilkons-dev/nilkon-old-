@@ -70,6 +70,7 @@ from cat_widgets import CatButton
 from panels import LogoMark, WordMark, QueueList, PlaylistDelegate, ASSETS
 from settings_dialog import SettingsDialog
 from titlebar import TitleBar, edges_at, cursor_for
+from collection_hero import CollectionHero
 from theme import T, ink, hue_for, nice_time, build_qss, FONT_FAMILIES
 from tracklist import TrackList, ColumnHeader
 from visuals import Turntable, MiniDisc, Spectrum, WaveField
@@ -176,7 +177,7 @@ class MusicPlayer(QMainWindow):
         for k, it in self.lib.online_meta.items():
             self.online_items[k] = dict(it)
 
-        _args = ["--no-video", "--quiet"]
+        _args = ["--no-video", "--quiet", "--no-osd", "--no-stats", "--no-metadata-network-access"]
         if self.lib.settings.get("normalize"):
             _args += ["--audio-filter=normvol", "--norm-buff-size=20", "--norm-max-level=2.0"]
         try:
@@ -188,7 +189,7 @@ class MusicPlayer(QMainWindow):
         self.covers = CoverCache(self.lib.dir, self)
         self.covers.changed.connect(self._covers_changed)
         self.hub = StreamHub(self.lib.dir / "stream_spool")
-        self.hub.sweep()
+        QTimer.singleShot(4000, self.hub.sweep)           # old spool files are cleaned up after start-up
         self._theme_sig = None
         self._theme_t = 0.0
         self.engine.tick.connect(self._theme_follow)
@@ -276,6 +277,7 @@ class MusicPlayer(QMainWindow):
         self.sleep_minutes = 0
         QTimer.singleShot(0, self._restore_last)
         QTimer.singleShot(0, self._open_start_page)
+        QTimer.singleShot(250, self._startup_suggestions)
 
     # -- helpers shared with delegates / dialogs ------------------------------------------
     def thumb_for(self, path):
@@ -510,7 +512,9 @@ class MusicPlayer(QMainWindow):
         self.home = HomePage(self)
         self.home.playMix.connect(self.play_mix)
         self.home.shuffleAll.connect(self.shuffle_all)
-        self.home.refreshSuggestions.connect(self.refresh_suggestions)
+        self.home.refreshSuggestions.connect(self.refresh_home_suggestions)
+        self.home.playOnline.connect(self.play_online_key)
+        self.home.menuOnline.connect(self.song_menu)
         self.home.playPath.connect(self._play_from_home)
         self.home.menuRequested.connect(self.song_menu)
         self.pages.addWidget(self.home)
@@ -529,32 +533,18 @@ class MusicPlayer(QMainWindow):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(14)
 
-        head = QHBoxLayout()
-        head.setSpacing(10)
-        tv = QVBoxLayout()
-        tv.setSpacing(0)
-        self.collection_title = QLabel("All tracks")
-        self.collection_title.setObjectName("sectionTitle")
+        self.collection_title = QLabel("All tracks")          # texts are kept for the logic; the hero draws them
         self.collection_count = QLabel("0 tracks")
-        self.collection_count.setObjectName("muted")
-        tv.addWidget(self.collection_title)
-        tv.addWidget(self.collection_count)
-        head.addLayout(tv, 1)
         self.col_play = GButton("Play", "play", "primary", 16)
-        self.col_play.clicked.connect(self.play_collection)
         self.col_shuffle = GButton("Shuffle", "shuffle", "glass", 16)
-        self.col_shuffle.clicked.connect(self.shuffle_collection)
-        head.addWidget(self.col_play)
-        head.addWidget(self.col_shuffle)
-        lay.addLayout(head)
-
-        strip = GlassPanel(20, 0.16)
-        strip.setFixedHeight(76)
-        sl = QVBoxLayout(strip)
-        sl.setContentsMargins(0, 0, 0, 0)
-        self.col_wave = WaveField(self.engine)
-        sl.addWidget(self.col_wave)
-        lay.addWidget(strip)
+        self.hero = CollectionHero()
+        self.hero.playClicked.connect(self.play_collection)
+        self.hero.shuffleClicked.connect(self.shuffle_collection)
+        self.hero.coverClicked.connect(lambda: self.choose_playlist_cover(self.current_collection))
+        self.hero.shareClicked.connect(lambda: self.share_playlist_code(self.current_collection))
+        lay.addWidget(self.hero)
+        self.col_wave = WaveField(self.engine)               # kept (not shown) for the code that updates it
+        self.col_wave.hide()
 
         self.col_header = ColumnHeader()
         lay.addWidget(self.col_header)
@@ -766,6 +756,7 @@ class MusicPlayer(QMainWindow):
         self.pages.setCurrentIndex(0)
         self.refresh_home()
         self._update_nav()
+        self._ensure_home_shelves()
 
     def show_online(self):
         self.page = "online"
@@ -790,11 +781,67 @@ class MusicPlayer(QMainWindow):
     def refresh_suggestions_online(self):
         self._show_discover(force=True)
 
+    def _shelf_cache_file(self):
+        return Path(self.lib.dir) / "shelves_cache.json"
+
+    def _save_shelf_cache(self):
+        try:
+            import json
+            data = [[t, sub, its] for t, sub, its in self._suggest_shelves]
+            tmp = self._shelf_cache_file().with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(self._shelf_cache_file())
+        except Exception:
+            pass
+
+    def _load_shelf_cache(self):
+        """Last session's rows appear at once while fresh ones are fetched in the background."""
+        try:
+            import json
+            data = json.loads(self._shelf_cache_file().read_text(encoding="utf-8"))
+            shelves = []
+            for t, sub, its in data[:8]:
+                good = [i for i in its if isinstance(i, dict) and isinstance(i.get("key"), str)
+                        and isinstance(i.get("title"), str) and is_online(i["key"])]
+                if good:
+                    shelves.append((str(t), str(sub), good))
+            if shelves:
+                self._suggest_shelves = shelves
+                self._suggest_items = [i for _, _, its in shelves for i in its]
+                self._suggest_t = 0.0                       # old: refreshed in the background
+                for it in self._suggest_items:
+                    self.online_items.setdefault(it["key"], it)
+                    self.lib.see_online(it)
+                self.home.shelves.set_shelves(shelves)
+        except Exception:
+            pass
+
+    def _startup_suggestions(self):
+        self._load_shelf_cache()
+        QTimer.singleShot(400, self.request_suggestions)
+
+    def refresh_home_suggestions(self):
+        self.request_suggestions()
+
+    def _ensure_home_shelves(self):
+        """Home shows the same rows as the Online page."""
+        if self._suggest_shelves:
+            if not self.home.shelves.shelves:
+                self.home.shelves.set_shelves(self._suggest_shelves)
+            if _time.monotonic() - self._suggest_t > 600:
+                self.request_suggestions()
+        elif not self.home.shelves.is_loading():
+            self.request_suggestions()
+
     def request_suggestions(self):
-        self.online.set_discover(True, self._suggest_label)
-        self.online.set_discover_busy(True)
-        if not self._suggest_shelves or self.online.stack.currentIndex() == 1:
-            self.online.show_message("loading")
+        on_online = self.page == "online" and not self.search.text().strip()
+        if on_online:
+            self.online.set_discover(True, self._suggest_label)
+            self.online.set_discover_busy(True)
+        if not self._suggest_shelves:
+            if on_online:
+                self.online.show_skeleton()
+            self.home.shelves.set_loading()
         self._suggest_token = self.jobs.suggest(self.taste)
 
     def _on_suggest_done(self, token, shelves, label):
@@ -806,11 +853,16 @@ class MusicPlayer(QMainWindow):
         self._suggest_items = flat
         self._suggest_label = label
         self._suggest_t = _time.monotonic()
+        self._save_shelf_cache()
         for it in flat:
             self.online_items.setdefault(it["key"], it)
             self.lib.see_online(it)
+        for _t, _s, its in shelves:                    # pictures start loading before the rows are even drawn
+            for it in its[:8]:
+                self.remote_images.get(it.get("thumb_url", ""), 200)
         for it in flat[:5]:                            # look up the first songs now: Play starts at once
             self.jobs.prefetch(it)
+        self.home.shelves.set_shelves(shelves)
         if self.page == "online" and not self.search.text().strip():
             self.online_results = list(flat)
             self.online.set_discover(True, label)
@@ -822,6 +874,8 @@ class MusicPlayer(QMainWindow):
         if token != self._suggest_token:
             return
         self.online.set_discover_busy(False)
+        if not self._suggest_shelves:
+            self.home.shelves.set_shelves([])
         if self.page == "online" and not self.search.text().strip():
             if self._suggest_shelves:
                 self.toast_msg(msg, 3200)
@@ -956,6 +1010,7 @@ class MusicPlayer(QMainWindow):
         self.tracklist.set_reorder_enabled(name != RECENT and not searching)
         self.collection_title.setText(self._collection_title(name))
         self._update_count(len(paths))
+        self._update_hero(paths)
         self.col_play.setEnabled(bool(paths))
         self.col_shuffle.setEnabled(bool(paths))
         if paths:
@@ -984,6 +1039,87 @@ class MusicPlayer(QMainWindow):
             self.list_stack.setCurrentIndex(1)
         QTimer.singleShot(0, self._sync_header_inset)
 
+    def playlist_cover_pm(self, name):
+        f = self.lib.playlist_covers.get(name)
+        if not f:
+            return None
+        cache = self.__dict__.setdefault("_pl_cover_cache", {})
+        if f not in cache:
+            pm = QPixmap(f)
+            cache[f] = None if pm.isNull() else pm
+            if len(cache) > 40:
+                cache.pop(next(iter(cache)))
+        return cache[f]
+
+    def _update_hero(self, paths=None):
+        if self.page != "collection" or not hasattr(self, "hero"):
+            return
+        name = self.current_collection
+        paths = self._visible_paths() if paths is None else paths
+        is_pl = name in self.lib.playlists
+        kind = "playlist" if is_pl else {LIKED: "liked", RECENT: "recent"}.get(name, "all")
+        mosaic = [self.thumb_for(pth) for pth in paths[:4]]
+        tint = None
+        for pm in mosaic:
+            if pm is not None and not pm.isNull():
+                try:
+                    h = cover_hue(pm)
+                except Exception:
+                    h = None
+                if h is not None:
+                    tint = QColor.fromHsvF(h % 1.0, 0.62, 0.78)
+                break
+        self.hero.set_content(kind, self._collection_title(name), self.collection_count.text(),
+                              self.playlist_cover_pm(name) if is_pl else None, mosaic, can_edit=is_pl,
+                              can_play=bool(paths), tint=tint)
+
+    def choose_playlist_cover(self, name):
+        if name not in self.lib.playlists:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Choose a picture for this playlist", str(Path.home() / "Pictures"), IMAGE_FILTER)
+        if not path:
+            return
+        from PySide6.QtGui import QImage
+        img = QImage(path)
+        if img.isNull():
+            notice(self, "Couldn't open the picture", "Please choose a PNG, JPG or WEBP image.")
+            return
+        s_ = min(img.width(), img.height())
+        img = img.copy((img.width() - s_) // 2, (img.height() - s_) // 2, s_, s_).scaled(
+            640, 640, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        folder = Path(self.lib.dir) / "playlist_covers"
+        try:
+            import hashlib
+            folder.mkdir(parents=True, exist_ok=True)
+            dest = folder / (hashlib.sha1(f"{name}{_time.time()}".encode("utf-8")).hexdigest()[:16] + ".jpg")
+            if not img.save(str(dest), "JPG", 90):
+                raise OSError("could not write the picture")
+        except OSError as exc:
+            notice(self, "Couldn't save the picture", str(exc))
+            return
+        old = self.lib.playlist_covers.get(name)
+        self.lib.playlist_covers[name] = str(dest)
+        if old and old != str(dest):
+            try:
+                Path(old).unlink()
+            except OSError:
+                pass
+        self.save_soon()
+        self.refresh_sidebar()
+        self._update_hero()
+        self.toast_msg("Playlist picture updated")
+
+    def remove_playlist_cover(self, name):
+        old = self.lib.playlist_covers.pop(name, None)
+        if old:
+            try:
+                Path(old).unlink()
+            except OSError:
+                pass
+        self.save_soon()
+        self.refresh_sidebar()
+        self._update_hero()
+
     def _sync_header_inset(self):
         sb = self.tracklist.verticalScrollBar()
         self.col_header.set_inset(sb.width() if sb.isVisible() else 0)
@@ -996,6 +1132,7 @@ class MusicPlayer(QMainWindow):
                 mins = total // 60000
                 text += f" · {mins // 60} h {mins % 60} min" if mins >= 60 else f" · {mins} min"
         self.collection_count.setText(text)
+        self._update_hero()
 
     def refresh_queue(self):
         self.queue.clear()
@@ -1016,6 +1153,9 @@ class MusicPlayer(QMainWindow):
         self.queue.viewport().update()
         self.home.viewport().update()
         self.online.repaint_rows()
+        self.home.shelves.repaint_all()
+        if self.page == "collection":
+            self._update_hero()
         for row in (self.home.recent, self.home.suggest):
             for c in row._cards:
                 c.update()
@@ -2575,12 +2715,18 @@ class MusicPlayer(QMainWindow):
         menu = style_menu(QMenu(self))
         play = menu.addAction(qicon("play", ic, 16), "Play playlist")
         rename = menu.addAction(qicon("edit", ic, 16), "Rename playlist…")
+        change_cover = menu.addAction(qicon("image", ic, 16), "Change picture…")
+        drop_cover = menu.addAction(qicon("x", ic, 16), "Remove picture") if name in self.lib.playlist_covers else None
         share_menu = style_menu(menu.addMenu(qicon("link", ic, 16), "Share playlist"))
         share_code = share_menu.addAction("Copy share code")
         share_file = share_menu.addAction("Save as a file (.nilkon)…")
         delete = menu.addAction(qicon("trash", ic, 16), "Delete playlist")
         chosen = menu.exec(self.playlist_list.viewport().mapToGlobal(pos))
-        if chosen == share_code:
+        if chosen == change_cover:
+            self.choose_playlist_cover(name)
+        elif drop_cover is not None and chosen == drop_cover:
+            self.remove_playlist_cover(name)
+        elif chosen == share_code:
             self.share_playlist_code(name)
         elif chosen == share_file:
             self.share_playlist_file(name)
@@ -2956,7 +3102,7 @@ class MusicPlayer(QMainWindow):
             pass
 
 
-def main():
+def main(app=None, splash=None):
     crashlog.install(Path.home() / ".nilkon_music")
     os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.*=false")      # keep the console clean
     if sys.platform == "win32":
@@ -2968,7 +3114,8 @@ def main():
     # Cyclic garbage collection only ever runs on the GUI thread: a collection inside a worker thread
     # can destroy Qt wrapper objects at the wrong time and crash Qt on Windows.
     gc.disable()
-    app = QApplication(sys.argv)
+    if app is None:
+        app = QApplication(sys.argv)
     gc_timer = QTimer()
     gc_ticks = [0]
 
@@ -2984,19 +3131,26 @@ def main():
     base_font.setPointSize(10)
     app.setFont(base_font)
     if vlc is None:
+        if splash is not None:
+            splash.close()
         QMessageBox.critical(None, "NILKON could not start",
-                             "VLC media player is required for playback and equalizer support.\n\n"
-                             "Install VLC (64-bit) from https://www.videolan.org/vlc/ then restart NILKON.\n\n"
+                             "The sound engine (VLC) could not be loaded.\n\n"
+                             "If you installed NILKON with its setup, reinstall it. If you run it from source, "
+                             "install VLC (64-bit) from https://www.videolan.org/vlc/ and restart NILKON.\n\n"
                              f"Technical details: {VLC_ERROR}")
         return 1
     try:
         window = MusicPlayer()
     except Exception as exc:
+        if splash is not None:
+            splash.close()
         QMessageBox.critical(None, "NILKON could not start",
-                             "Something went wrong while starting the player. Make sure VLC (64-bit) is installed.\n\n"
+                             "Something went wrong while starting the player.\n\n"
                              f"Technical details: {exc}")
         raise
     window.show()
+    if splash is not None:
+        splash.finish(window)
     return app.exec()
 
 

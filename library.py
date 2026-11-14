@@ -116,6 +116,7 @@ class Library:
         self.file = self.dir / "library.json"
         self.tracks = []
         self.playlists = {}          # name -> [paths]   (never contains the reserved names)
+        self.playlist_covers = {}    # playlist name -> picture file chosen by the user
         self.liked = []
         self.meta = {}
         self.history = []            # most recent first
@@ -192,6 +193,8 @@ class Library:
                 if name in RESERVED or not isinstance(name, str) or not isinstance(items, list):
                     continue
                 self.playlists[name] = list(dict.fromkeys(p for p in items if p in tset))
+        pc_ = data.get("playlist_covers", {})
+        self.playlist_covers = {k: v for k, v in pc_.items() if k in self.playlists and isinstance(v, str)} if isinstance(pc_, dict) else {}
         meta = data.get("meta", {})
         self.meta = {k: v for k, v in meta.items() if k in tset and isinstance(v, dict)} if isinstance(meta, dict) else {}
         for k, it in self.online_meta.items():
@@ -265,7 +268,7 @@ class Library:
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
             payload = {
-                "version": 2, "tracks": self.tracks, "liked": self.liked, "playlists": self.playlists,
+                "version": 2, "tracks": self.tracks, "liked": self.liked, "playlists": self.playlists, "playlist_covers": self.playlist_covers,
                 "meta": {k: v for k, v in self.meta.items() if not is_online(k)}, "history": self.history, "play_counts": self.play_counts,
                 "track_eq": self.track_eq, "eq_presets": self.eq_presets, "downloads": self.downloads, "online": self._referenced_online(), "eq": self.eq, "settings": self.settings,
                 "last_path": self.last_path, "last_pos": int(self.last_pos),
@@ -417,9 +420,12 @@ class Library:
         if new != old and (new in RESERVED or new in self.playlists):
             return False, "A playlist with this name already exists."
         self.playlists = {(new if k == old else k): v for k, v in self.playlists.items()}
+        if old in self.playlist_covers and new != old:
+            self.playlist_covers[new] = self.playlist_covers.pop(old)
         return True, ""
 
     def delete_playlist(self, name):
+        self.playlist_covers.pop(name, None)
         return self.playlists.pop(name, None) is not None
 
     def add_to_playlist(self, name, path):

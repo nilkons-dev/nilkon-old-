@@ -184,7 +184,18 @@ class PlaylistDelegate(QStyledItemDelegate):
             p.fillPath(row, ink(0.07))
         cy = rect.center().y()
         accent = T.c1.lighter(120) if T.dark else T.c1.darker(115)
-        draw_icon(p, "list-music", QRectF(rect.left() + 12, cy - 8, 16, 16), accent if sel else ink(0.60))
+        thumb = self.host.playlist_cover_pm(name) if hasattr(self.host, "playlist_cover_pm") else None
+        text_x = 38
+        if thumb is not None and not thumb.isNull():
+            tr = QRectF(rect.left() + 8, cy - 14, 28, 28)
+            p.save()
+            p.setClipPath(round_path(tr, 7))
+            s_ = min(thumb.width(), thumb.height())
+            p.drawPixmap(tr, thumb, QRectF((thumb.width() - s_) / 2.0, (thumb.height() - s_) / 2.0, s_, s_))
+            p.restore()
+            text_x = 46
+        else:
+            draw_icon(p, "list-music", QRectF(rect.left() + 12, cy - 8, 16, 16), accent if sel else ink(0.60))
         fm, fm2 = QFontMetrics(self.f), QFontMetrics(self.f2)
         ctxt = str(count if count is not None else "")
         cw = fm2.horizontalAdvance(ctxt)
@@ -193,6 +204,6 @@ class PlaylistDelegate(QStyledItemDelegate):
         p.drawText(QPointF(rect.right() - 12 - cw, text_baseline(fm2, rect.top(), rect.height())), ctxt)
         p.setFont(self.f)
         p.setPen(ink(0.98) if sel else ink(0.78))
-        p.drawText(QPointF(rect.left() + 38, text_baseline(fm, rect.top(), rect.height())),
-                   fm.elidedText(str(name), Qt.TextElideMode.ElideRight, int(max(20, rect.width() - 38 - cw - 24))))
+        p.drawText(QPointF(rect.left() + text_x, text_baseline(fm, rect.top(), rect.height())),
+                   fm.elidedText(str(name), Qt.TextElideMode.ElideRight, int(max(20, rect.width() - text_x - cw - 24))))
         p.restore()

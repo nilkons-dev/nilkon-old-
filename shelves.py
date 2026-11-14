@@ -1,6 +1,6 @@
 """Spotify-style home of the Online page: rows ("shelves") of cover cards that scroll sideways with arrows on both sides."""
-from PySide6.QtCore import Qt, QRectF, QPointF, QPoint, QVariantAnimation, QEasingCurve, Signal
-from PySide6.QtGui import QPainter, QFont, QFontMetrics, QPen, QColor
+from PySide6.QtCore import Qt, QRectF, QPointF, QPoint, QTimer, QVariantAnimation, QEasingCurve, Signal
+from PySide6.QtGui import QPainter, QFont, QFontMetrics, QPen, QColor, QLinearGradient, QBrush
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea, QFrame
 
 from icons import draw_icon
@@ -173,7 +173,7 @@ class Shelf(QWidget):
             playing = is_cur and host.engine.playing
             if hov or is_cur:
                 p.fillPath(round_path(card.adjusted(0, 0, 0, 0), 14), alpha(T.c1, 0.14) if is_cur else ink(0.07))
-            pm = host.remote_images.get(it.get("thumb_url", ""), 300)
+            pm = host.remote_images.get(it.get("thumb_url", ""), 200)
             self._cover(p, cr, key, pm)
             if is_cur:
                 p.setBrush(NOBRUSH)
@@ -239,8 +239,94 @@ class Shelf(QWidget):
         p.drawPath(round_path(rect.adjusted(0.5, 0.5, -0.5, -0.5), 12))
 
 
+class SkeletonShelf(QWidget):
+    """Grey placeholder row with a moving shine - shown while the suggestions are being fetched."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(SHELF_H)
+        self.phase = 0.0
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(AA)
+        w = float(max(1, self.width()))
+        x = (self.phase * 1.6 - 0.3) * w
+        g = QLinearGradient(x - w * 0.25, 0, x + w * 0.25, 0)
+        g.setColorAt(0.0, ink(0.055))
+        g.setColorAt(0.5, ink(0.115))
+        g.setColorAt(1.0, ink(0.055))
+        brush = QBrush(g)
+        p.setPen(NOPEN)
+        p.setBrush(brush)
+        p.drawRoundedRect(QRectF(8, 16, min(240.0, w * 0.4), 22), 8, 8)
+        n = int((w - 8) // (CARD_W + GAP)) + 1
+        for i in range(n):
+            left = 4 + i * (CARD_W + GAP) + 8
+            p.drawRoundedRect(QRectF(left, HEAD_H + 4, COVER, COVER), 12, 12)
+            p.drawRoundedRect(QRectF(left, HEAD_H + COVER + 14, COVER * 0.85, 12), 6, 6)
+            p.drawRoundedRect(QRectF(left, HEAD_H + COVER + 34, COVER * 0.55, 10), 5, 5)
+        p.end()
+
+
+class ShelfColumn(QWidget):
+    """The shelves one below the other (no scrolling of its own - Home and the Online page scroll it)."""
+    playRequested = Signal(str)
+    menuRequested = Signal(str, object)
+
+    def __init__(self, host, parent=None):
+        super().__init__(parent)
+        self.host = host
+        self.lay = QVBoxLayout(self)
+        self.lay.setContentsMargins(0, 0, 0, 0)
+        self.lay.setSpacing(8)
+        self.shelves = []
+        self._skeleton = []
+        self._timer = QTimer(self)
+        self._timer.setInterval(40)
+        self._timer.timeout.connect(self._shine)
+
+    def _clear(self):
+        for w in self.shelves + self._skeleton:
+            w.setParent(None)
+            w.deleteLater()
+        self.shelves, self._skeleton = [], []
+
+    def _shine(self):
+        if not self.isVisible():
+            return
+        for s in self._skeleton:
+            s.phase = (s.phase + 0.018) % 1.0
+            s.update()
+
+    def set_loading(self, rows=3):
+        self._clear()
+        for _ in range(rows):
+            sk = SkeletonShelf()
+            self.lay.addWidget(sk)
+            self._skeleton.append(sk)
+        self._timer.start()
+
+    def set_shelves(self, shelves):
+        self._timer.stop()
+        self._clear()
+        for title, sub, items in shelves:
+            sh = Shelf(self.host, title, sub, items)
+            sh.playRequested.connect(self.playRequested)
+            sh.menuRequested.connect(self.menuRequested)
+            self.lay.addWidget(sh)
+            self.shelves.append(sh)
+
+    def is_loading(self):
+        return bool(self._skeleton)
+
+    def repaint_all(self):
+        for s in self.shelves:
+            s.update()
+
+
 class ShelvesView(QScrollArea):
-    """Vertical page that holds the shelves."""
+    """Vertical page that holds the shelves (the Online page)."""
     playRequested = Signal(str)
     menuRequested = Signal(str, object)
 
@@ -252,29 +338,29 @@ class ShelvesView(QScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.viewport().setAutoFillBackground(False)
         self.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-        self.body = QWidget()
-        self.body.setAutoFillBackground(False)
-        self.body.setStyleSheet("background: transparent;")
-        self.lay = QVBoxLayout(self.body)
-        self.lay.setContentsMargins(0, 0, 6, 16)
-        self.lay.setSpacing(8)
-        self.lay.addStretch(1)
-        self.setWidget(self.body)
-        self.shelves = []
+        body = QWidget()
+        body.setAutoFillBackground(False)
+        body.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(0, 0, 6, 16)
+        lay.setSpacing(0)
+        self.column = ShelfColumn(host)
+        self.column.playRequested.connect(self.playRequested)
+        self.column.menuRequested.connect(self.menuRequested)
+        lay.addWidget(self.column)
+        lay.addStretch(1)
+        self.setWidget(body)
 
     def set_shelves(self, shelves):
-        for s in self.shelves:
-            s.setParent(None)
-            s.deleteLater()
-        self.shelves = []
-        for title, sub, items in shelves:
-            sh = Shelf(self.host, title, sub, items)
-            sh.playRequested.connect(self.playRequested)
-            sh.menuRequested.connect(self.menuRequested)
-            self.lay.insertWidget(self.lay.count() - 1, sh)
-            self.shelves.append(sh)
+        self.column.set_shelves(shelves)
         self.verticalScrollBar().setValue(0)
 
+    def set_loading(self):
+        self.column.set_loading()
+        self.verticalScrollBar().setValue(0)
+
+    def is_loading(self):
+        return self.column.is_loading()
+
     def repaint_all(self):
-        for s in self.shelves:
-            s.update()
+        self.column.repaint_all()

@@ -268,30 +268,31 @@ class Turntable(QWidget):
 
 
 class MiniDisc(QWidget):
-    """Small spinning record used in the player dock."""
+    """Cover of the song in the player dock: a clean rounded picture (no spinning record)."""
 
     def __init__(self, engine, size=68, parent=None):
         super().__init__(parent)
         self.engine = engine
         self.cover = None
         self.setFixedSize(size, size)
-        engine.tick.connect(self._tick)
 
     def set_cover(self, pix):
         self.cover = pix
         self.update()
 
-    def _tick(self):
-        if self.isVisible():
-            self.update()
-
     def paintEvent(self, _e):
+        from tracklist import draw_thumb          # local import: tracklist imports this module
         p = QPainter(self)
         p.setRenderHint(AA)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        c = QPointF(self.width() / 2.0, self.height() / 2.0)
-        r = min(self.width(), self.height()) / 2.0 - 4
-        paint_vinyl(p, c, r, self.engine.angle, self.cover, 0.5 * self.engine.play_t, 0.5)
+        side = min(self.width(), self.height()) - 4
+        rect = QRectF((self.width() - side) / 2.0, (self.height() - side) / 2.0, side, side)
+        cov = self.cover
+        if cov is not None and not cov.isNull() and cov.width() != cov.height():       # wide pictures: crop the middle
+            s = min(cov.width(), cov.height())
+            cov = cov.copy((cov.width() - s) // 2, (cov.height() - s) // 2, s, s)
+        draw_thumb(p, rect, "nilkon", cov)
+        p.end()
 
 
 # ------------------------------------------------------------------------------------

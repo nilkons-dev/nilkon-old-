@@ -59,6 +59,25 @@ Data is stored in `~/.nilkon_music`. Renaming a song changes its display name on
 - Waves for local and online songs start within a fraction of a second (progressive analysis) and no longer jump when the analysis completes.
 - Buttons, sliders and menus now follow the song colours.
 
+## 1.10.0 - home shelves, playlist pages, faster start
+- Home shows the same suggestion rows as the Online page; rows load with a grey "skeleton" placeholder and the last
+  rows are remembered, so they appear instantly on the next start.
+- The song picture replaces the little record in the player bar.
+- Playlist pages look like Spotify's: big cover (your own photo - click it - or a mosaic of the first songs), name,
+  size, big Play button. Right-click a playlist > Change picture.
+- Faster start: splash screen at once, leaner bundled VLC (video plugins removed, plugin list pre-built).
+- Flat window bar: the close button now keeps the window border.
+
+### "Error 4551: An Application Control policy has blocked this file" on another PC
+Windows "Smart App Control" (or a company policy) blocks every program that is not digitally signed. Options:
+1. Sign the app (the real fix): get a code-signing certificate (.pfx), add the repository secrets
+   `SIGN_PFX_BASE64` (the .pfx as base64) and `SIGN_PFX_PASSWORD`; the Actions build then signs the app and installer.
+   (Open-source projects may qualify for free signing at signpath.io.)
+2. On the friend's PC: Settings > Privacy & security > Windows Security > App & browser control >
+   Smart App Control > Off (note: it cannot be switched on again later), or use the portable zip
+   (`NILKON_portable.zip`, right-click the zip > Properties > Unblock before extracting).
+3. If the PC belongs to a school / company, the administrator has to allow the app.
+
 ## 1.9.0 - downloads, home shelves, tray, playlists
 - Download: parallel pieces (much faster), written to a temporary folder and moved in place with retries, so the
   "WinError 32 ... used by another process" error and refused downloads are gone. The old engine stays as a fallback.

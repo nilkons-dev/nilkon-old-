@@ -12,7 +12,7 @@ from theme import T, alpha, ink, surface
 BAR_H = 38
 BTN_W = 46
 BTN_H = BAR_H
-RADIUS = 14
+RADIUS = 9
 CLOSE_RED = QColor(232, 72, 85)
 
 
@@ -40,10 +40,10 @@ class TitleBar(QWidget):
         return self._win.isMaximized() or self._win.isFullScreen()
 
     def _button_rects(self):
-        right = float(self.width())
+        right = float(self.width()) - 1.0
         rects = []
         for i in (2, 1, 0):
-            rects.append((i, QRectF(right - BTN_W, 0, BTN_W, BTN_H)))
+            rects.append((i, QRectF(right - BTN_W, 1.0, BTN_W, BTN_H - 1.0)))
             right -= BTN_W
         return dict(rects), right
 
@@ -60,7 +60,7 @@ class TitleBar(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         clip = QPainterPath()
-        clip.addRoundedRect(QRectF(0, 0, self.width(), self.height() + RADIUS * 2), RADIUS, RADIUS)
+        clip.addRoundedRect(QRectF(1.0, 1.0, self.width() - 2.0, self.height() + RADIUS * 2), RADIUS - 1.0, RADIUS - 1.0)
         p.setClipPath(clip)
 
         # flat strip with one hairline underneath

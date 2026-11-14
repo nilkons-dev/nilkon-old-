@@ -7,6 +7,7 @@ from icons import draw_icon
 from theme import T, alpha, ink, surface
 from tracklist import draw_thumb
 from visuals import WaveField
+from shelves import ShelfColumn
 from widgets import (GlassPanel, GButton, ElidedLabel, eyebrow, ui_font, round_path, NOPEN, NOBRUSH, AA)
 
 CARD_W, CARD_H, CARD_GAP = 168, 214, 16
@@ -168,6 +169,8 @@ class HomePage(QScrollArea):
     refreshSuggestions = Signal()
     playPath = Signal(str)
     menuRequested = Signal(str, object)
+    playOnline = Signal(str)
+    menuOnline = Signal(str, object)
 
     def __init__(self, host, parent=None):
         super().__init__(parent)
@@ -228,7 +231,19 @@ class HomePage(QScrollArea):
         self.suggest.add_action(refresh)
         self.suggest.cardClicked.connect(self.playPath)
         self.suggest.cardMenu.connect(self.menuRequested)
+        self.suggest.hide()                 # replaced by the same suggestion rows the Online page shows
         lay.addWidget(self.suggest)
+        self.discover_head = QHBoxLayout()
+        self.discover_head.addStretch(1)
+        self.refresh_btn = GButton("Refresh", "reset", "glass", 15)
+        self.refresh_btn.setToolTip("Show different songs")
+        self.refresh_btn.clicked.connect(self.refreshSuggestions)
+        self.discover_head.addWidget(self.refresh_btn)
+        lay.addLayout(self.discover_head)
+        self.shelves = ShelfColumn(host)
+        self.shelves.playRequested.connect(self.playOnline)
+        self.shelves.menuRequested.connect(self.menuOnline)
+        lay.addWidget(self.shelves)
         lay.addStretch(1)
 
     def set_hero(self, eyebrow_text, title, desc):

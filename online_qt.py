@@ -286,7 +286,7 @@ class RemoteImages(QObject):
     load before old ones), kept on disk so they never load twice, small files for small pictures.
     Decoding and every Qt object stay in the GUI thread (_drain)."""
     changed = Signal()
-    WORKERS = 6
+    WORKERS = 10
 
     def __init__(self, parent=None, cache_dir=None):
         super().__init__(parent)
@@ -389,7 +389,7 @@ class RemoteImages(QObject):
 
     def _drain(self):
         got = False
-        for _ in range(3):
+        for _ in range(6):
             if not self._done:
                 break
             k, data = self._done.popleft()

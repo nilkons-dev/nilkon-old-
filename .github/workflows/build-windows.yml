@@ -27,7 +27,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      # Optional: code signing. Add the repository secrets SIGN_PFX_BASE64 (your .pfx file, base64) and
+      # SIGN_PFX_PASSWORD: the app and the installer are then signed, which stops Windows "Smart App Control"
+      # (error 4551) and SmartScreen from blocking them on other PCs.
+      - name: Prepare signing certificate (only when configured)
+        shell: pwsh
+        env:
+          PFX: ${{ secrets.SIGN_PFX_BASE64 }}
+        run: |
+          if ($env:PFX) {
+            [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\\cert.pfx", [Convert]::FromBase64String($env:PFX))
+            "SIGN_PFX_FILE=$env:RUNNER_TEMP\\cert.pfx" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          } else { Write-Host "No signing certificate configured - the build stays unsigned." }
+
       - name: Build app and installer
+        env:
+          SIGN_PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
         run: python build_release.py
 
       - name: Zip the portable folder
