@@ -269,6 +269,60 @@ class SkeletonShelf(QWidget):
         p.end()
 
 
+class SkeletonList(QWidget):
+    """Grey placeholder song rows with a moving shine - shown while a search is running."""
+    ROW = 60
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.phase = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(40)
+        self._timer.timeout.connect(self._step)
+
+    def start(self):
+        self._timer.start()
+
+    def stop(self):
+        self._timer.stop()
+
+    def hideEvent(self, e):
+        self._timer.stop()
+        super().hideEvent(e)
+
+    def showEvent(self, e):
+        self._timer.start()
+        super().showEvent(e)
+
+    def _step(self):
+        self.phase = (self.phase + 0.02) % 1.0
+        self.update()
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(AA)
+        w = float(max(1, self.width()))
+        x = (self.phase * 1.6 - 0.3) * w
+        g = QLinearGradient(x - w * 0.25, 0, x + w * 0.25, 0)
+        g.setColorAt(0.0, ink(0.055))
+        g.setColorAt(0.5, ink(0.115))
+        g.setColorAt(1.0, ink(0.055))
+        brush = QBrush(g)
+        p.setPen(NOPEN)
+        p.setBrush(brush)
+        rows = int(self.height() // self.ROW)
+        for i in range(max(1, rows)):
+            y = i * self.ROW
+            p.drawEllipse(QRectF(10, y + 14, 32, 32))
+            p.drawRoundedRect(QRectF(56, y + 9, 42, 42), 9, 9)
+            tw = w * (0.30 + 0.12 * ((i * 7) % 4) / 3.0)
+            p.drawRoundedRect(QRectF(112, y + 14, tw, 12), 6, 6)
+            p.drawRoundedRect(QRectF(112, y + 34, tw * 0.55, 10), 5, 5)
+            p.drawRoundedRect(QRectF(w - 130, y + 24, 36, 10), 5, 5)
+            p.drawEllipse(QRectF(w - 70, y + 16, 28, 28))
+        p.end()
+
+
 class ShelfColumn(QWidget):
     """The shelves one below the other (no scrolling of its own - Home and the Online page scroll it)."""
     playRequested = Signal(str)

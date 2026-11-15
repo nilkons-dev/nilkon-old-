@@ -92,7 +92,7 @@ class Taste:
             tmp.write_text(json.dumps(data, ensure_ascii=False), "utf-8")
             os.replace(tmp, self.path)
         except OSError:
-            pass
+            self._dirty = True                   # try again at the next save
 
     def reset(self):
         with self.lock:

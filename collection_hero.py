@@ -1,7 +1,7 @@
 """Header of a playlist / collection page (Spotify style): big cover, name, size, big play button, extra buttons.
 Playlists can carry a picture of the user's own; without one the first song covers form a 2 x 2 mosaic."""
 from PySide6.QtCore import Qt, QRectF, QPointF, Signal
-from PySide6.QtGui import QPainter, QFont, QFontMetrics, QPen, QColor, QLinearGradient, QBrush
+from PySide6.QtGui import QPainter, QFont, QFontMetrics, QPen, QColor, QLinearGradient, QBrush, QPainterPath
 from PySide6.QtWidgets import QWidget
 
 from icons import draw_icon
@@ -19,6 +19,7 @@ class CollectionHero(QWidget):
     coverClicked = Signal()
     shareClicked = Signal()
     menuClicked = Signal()
+    sortClicked = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -32,15 +33,17 @@ class CollectionHero(QWidget):
         self.can_edit = False
         self.can_play = False
         self.tint = None
+        self.sort_label = ""
         self._hover = ""
         self.f_eye = ui_font(11, QFont.Weight.Bold)
         self.f_meta = ui_font(13, QFont.Weight.Normal)
 
     # -- data ---------------------------------------------------------------------------------------------
-    def set_content(self, kind, title, meta, custom=None, mosaic=(), can_edit=False, can_play=True, tint=None):
+    def set_content(self, kind, title, meta, custom=None, mosaic=(), can_edit=False, can_play=True, tint=None, sort_label=""):
         self.kind, self.title, self.meta = kind, title, meta
         self.custom, self.mosaic = custom, [m for m in mosaic if m is not None and not m.isNull()][:4]
         self.can_edit, self.can_play, self.tint = can_edit, can_play, tint
+        self.sort_label = sort_label
         self.update()
 
     # -- geometry -----------------------------------------------------------------------------------------
@@ -60,6 +63,10 @@ class CollectionHero(QWidget):
             x += 40 + 6
             out["share"] = QRectF(x, y + 8, 40, 40)
             x += 40 + 6
+        if self.sort_label:
+            fm = QFontMetrics(self.f_meta)
+            wd = fm.horizontalAdvance(self.sort_label) + 44
+            out["sort"] = QRectF(float(self.width()) - PAD - wd, y + 10, wd, 36)
         return out
 
     def _zone(self, pos):
@@ -95,6 +102,9 @@ class CollectionHero(QWidget):
             self.coverClicked.emit()
         elif z == "share":
             self.shareClicked.emit()
+        elif z == "sort":
+            r = self._buttons()["sort"]
+            self.sortClicked.emit(self.mapToGlobal(QPointF(r.right(), r.bottom()).toPoint()))
 
     # -- painting -----------------------------------------------------------------------------------------
     def _placeholder(self, p, r):
@@ -197,6 +207,24 @@ class CollectionHero(QWidget):
                 rr = r.adjusted(-2, -2, 2, 2) if hov and not dis else r
                 p.drawEllipse(rr)
                 draw_icon(p, "play", QRectF(r.center().x() - 12 + 2, r.center().y() - 12, 24, 24), T.on_accent)
+            elif key == "sort":
+                if hov:
+                    p.setPen(NOPEN)
+                    p.setBrush(ink(0.08))
+                    p.drawRoundedRect(r, 18, 18)
+                p.setFont(self.f_meta)
+                p.setPen(ink(0.95 if hov else 0.72))
+                fm3 = QFontMetrics(self.f_meta)
+                p.drawText(QPointF(r.left() + 16, r.center().y() + (fm3.ascent() - fm3.descent()) / 2.0), self.sort_label)
+                tx = r.right() - 20
+                p.setBrush(ink(0.72))
+                p.setPen(NOPEN)
+                tri = QPainterPath()
+                tri.moveTo(tx - 4, r.center().y() - 2)
+                tri.lineTo(tx + 4, r.center().y() - 2)
+                tri.lineTo(tx, r.center().y() + 3)
+                tri.closeSubpath()
+                p.drawPath(tri)
             else:
                 if hov and not dis:
                     p.setPen(NOPEN)

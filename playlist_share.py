@@ -84,7 +84,10 @@ def parse_code(text):
         raise ImportError_("This is not a NILKON share code.")
     code = re.split(r"\s", text[i + len(PREFIX):], 1)[0]
     try:
-        raw = zlib.decompress(base64.urlsafe_b64decode(code + "=" * (-len(code) % 4)))
+        d = zlib.decompressobj()
+        raw = d.decompress(base64.urlsafe_b64decode(code + "=" * (-len(code) % 4)), 5_000_000)
+        if d.unconsumed_tail:
+            raise ValueError("too large")
         data = json.loads(raw.decode("utf-8"))
     except Exception as exc:
         raise ImportError_("The share code is damaged - copy it again completely.") from exc
@@ -127,7 +130,10 @@ def parse_file_text(text, filename=""):
             dialect = csv.Sniffer().sniff(first, delimiters=",;\t")
         except csv.Error:
             dialect = csv.excel
-        rows = list(csv.reader(io.StringIO(s), dialect))
+        try:
+            rows = list(csv.reader(io.StringIO(s), dialect))
+        except csv.Error as exc:
+            raise ImportError_("The file is not a valid list.") from exc
         head = [c.strip().lower() for c in rows[0]]
         ti = next((head.index(c) for c in _TITLE_COLS if c in head), -1)
         ai = next((head.index(c) for c in _ARTIST_COLS if c in head), -1)

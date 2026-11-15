@@ -59,6 +59,16 @@ Data is stored in `~/.nilkon_music`. Renaming a song changes its display name on
 - Waves for local and online songs start within a fraction of a second (progressive analysis) and no longer jump when the analysis completes.
 - Buttons, sliders and menus now follow the song colours.
 
+## 1.11.0 - new look, sort, stronger network
+- New logo: red cat-and-moon app icon, and the new animated logo beside the NILKON name, in Settings and in About.
+- Default colours are now red + black (existing installs switch once; you can still change it in Settings).
+- Playlists, Liked and Library can be sorted: Custom order, Title, Artist, Duration, Recently added (button on the playlist page; remembered per playlist).
+- Online page always shows the skeleton loader while songs load; the last suggestions show instantly and refresh behind.
+- Song pictures load faster (keep-alive connections, retries, atomic cache).
+- Fixed: when a song ended or the net dropped, the next song did not start and the last second repeated. The stream proxy now closes
+  cut-off downloads properly and a watchdog moves on if the position freezes.
+- Faster start: the sound engine and yt-dlp warm up in the background while the window is built.
+
 ## 1.10.0 - home shelves, playlist pages, faster start
 - Home shows the same suggestion rows as the Online page; rows load with a grey "skeleton" placeholder and the last
   rows are remembered, so they appear instantly on the next start.

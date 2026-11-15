@@ -24,7 +24,7 @@ CHUNK = 1024 * 1024
 MIN_CHUNK = 128 * 1024
 START_CHUNK = 512 * 1024          # size of the pieces the parallel workers fetch (shrinks if the server refuses big ones)
 WORKERS = 3
-MAX_BYTES = 80 * 1024 * 1024
+MAX_BYTES = 256 * 1024 * 1024      # a song bigger than this is not buffered ahead
 OFFLINE_PATIENCE = 75.0           # seconds without internet before a song gives up
 PREFETCH_BYTES = 1536 * 1024
 SEEK_AHEAD = 3 * 1024 * 1024      # a request further ahead than this is served straight from the internet
@@ -130,6 +130,15 @@ class Session:
             return start, n
 
     def _worker(self):
+        try:
+            self._worker_body()
+        except Exception as exc:                      # a dying worker must never leave a silent hole in the song
+            if not self.error:
+                self.error = str(exc) or "worker failed"
+            with self.cond:
+                self.cond.notify_all()
+
+    def _worker_body(self):
         box = {}
         fails = 0
         offline_since = None
@@ -255,6 +264,8 @@ class Session:
             with self.cond:
                 if self.size is None:
                     self.size = self.have
+                elif (not self.closed and not self.error and self.have < min(self.size, self.limit, MAX_BYTES)):
+                    self.error = "incomplete download"
                 self.cond.notify_all()
             try:
                 if self.f_write:
@@ -287,7 +298,7 @@ class Session:
 
     def _cleanup(self):
         self.thread.join(timeout=6)
-        for _ in range(5):
+        for _ in range(15):
             try:
                 os.remove(self.path)
                 return
@@ -316,46 +327,57 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _serve(self, head):
         try:
-            s = self._session()
-            if s is None:
-                self.send_error(404)
-                return
-            size = s.wait_size()
-            if not size:
-                self.send_error(502)
-                return
-            start, end = 0, size - 1
-            rng = self.headers.get("Range", "")
-            m = re.match(r"bytes=(\d*)-(\d*)", rng)
-            partial = False
-            if m and (m.group(1) or m.group(2)):
-                partial = True
-                if m.group(1):
-                    start = int(m.group(1))
-                    if m.group(2):
-                        end = min(int(m.group(2)), size - 1)
-                else:                                   # suffix range: last N bytes
-                    start = max(0, size - int(m.group(2)))
-            if start >= size:
-                self.send_response(416)
-                self.send_header("Content-Range", f"bytes */{size}")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
-            length = end - start + 1
-            self.send_response(206 if partial else 200)
-            self.send_header("Content-Type", s.mime)
-            self.send_header("Accept-Ranges", "bytes")
-            self.send_header("Content-Length", str(length))
-            if partial:
-                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self._serve_inner(head)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            self.close_connection = True
+        except Exception:
+            self.close_connection = True
+
+    def _serve_inner(self, head):
+        s = self._session()
+        if s is None:
+            self.send_error(404)
+            return
+        size = s.wait_size()
+        if not size:
+            self.send_error(502)
+            return
+        start, end = 0, size - 1
+        rng = self.headers.get("Range", "")
+        m = re.match(r"bytes=(\d*)-(\d*)", rng)
+        partial = False
+        if m and (m.group(1) or m.group(2)):
+            partial = True
+            if m.group(1):
+                start = int(m.group(1))
+                if m.group(2):
+                    end = min(int(m.group(2)), size - 1)
+            else:                                   # suffix range: last N bytes
+                start = max(0, size - int(m.group(2)))
+        if start >= size or end < start:
+            self.send_response(416)
+            self.send_header("Content-Range", f"bytes */{size}")
+            self.send_header("Content-Length", "0")
             self.end_headers()
-            if head:
-                return
-            pos = start
-            if pos > s.have + SEEK_AHEAD and not s.closed:
-                self._passthrough(s, pos, end)
-                return
+            return
+        if s.error and s.have <= start and not head:
+            self.send_error(502)                    # the download failed: let the player reconnect / give up
+            self.close_connection = True
+            return
+        length = end - start + 1
+        self.send_response(206 if partial else 200)
+        self.send_header("Content-Type", s.mime)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        if partial:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        if head:
+            return
+        pos = start
+        if pos > s.have + SEEK_AHEAD and not s.closed:
+            pos = self._passthrough(s, pos, end)
+        else:
             with open(s.path, "rb") as f:
                 while pos <= end:
                     waited = 0.0
@@ -372,23 +394,36 @@ class _Handler(BaseHTTPRequestHandler):
                         break
                     self.wfile.write(buf)
                     pos += len(buf)
-        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
-            pass
-        except Exception:
-            pass
+        if pos <= end:
+            # fewer bytes than promised: close the connection so the player sees the end / error at once
+            # instead of waiting for bytes that will never come (it would loop the last second of sound)
+            self.close_connection = True
 
     def _passthrough(self, s, pos, end):
-        """Seek far ahead of the download: stream that part straight from the internet."""
-        try:
-            req = urllib.request.Request(s.url, headers={"User-Agent": s._ua(), "Range": f"bytes={pos}-{end}"})
-            with urllib.request.urlopen(req, timeout=15) as r:
-                while True:
-                    buf = r.read(64 * 1024)
-                    if not buf:
-                        break
-                    self.wfile.write(buf)
-        except Exception:
-            pass
+        """Seek far ahead of the download: stream that part straight from the internet. Returns the next position."""
+        for attempt in range(2):
+            try:
+                req = urllib.request.Request(s.url, headers={"User-Agent": s._ua(), "Range": f"bytes={pos}-{end}"})
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    if r.status != 206 and pos > 0:
+                        return pos                  # the server ignored the range: sending it would corrupt the sound
+                    while pos <= end:
+                        buf = r.read(min(64 * 1024, end - pos + 1))
+                        if not buf:
+                            break
+                        self.wfile.write(buf)
+                        pos += len(buf)
+                return pos
+            except urllib.error.HTTPError as exc:
+                if exc.code in (403, 404, 410) and attempt == 0:
+                    s._refresh_url()                # the address expired: ask for a new one and retry once
+                    continue
+                return pos
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                raise
+            except Exception:
+                return pos
+        return pos
 
 
 class StreamHub:
@@ -418,7 +453,8 @@ class StreamHub:
             self._ensure_server()
             sid = re.sub(r"[^A-Za-z0-9_-]", "_", key)[:60]
             s = self.sessions.get(sid)
-            if s is not None and (s.closed or s.error or (s.size is not None and s.have == 0)):
+            if s is not None and (s.closed or s.error or (s.size is not None and s.have == 0)
+                                  or (s.size is not None and not s.thread.is_alive() and s.have < min(s.size, s.limit, MAX_BYTES))):
                 self.sessions.pop(sid).close()
                 s = None
             if s is None:
@@ -445,6 +481,7 @@ class StreamHub:
             if self._server is not None:
                 try:
                     self._server.shutdown()
+                    self._server.server_close()
                 except Exception:
                     pass
                 self._server = None
@@ -452,7 +489,11 @@ class StreamHub:
     def sweep(self):
         """Remove leftover spool files of earlier runs."""
         try:
+            with self._lock:
+                live = {Path(x.path) for x in self.sessions.values()}
             for f in self.folder.glob("*.spool"):
+                if f in live:
+                    continue
                 try:
                     f.unlink()
                 except OSError:

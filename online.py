@@ -83,6 +83,52 @@ def fetch_bytes(url, timeout=15, limit=8 * 1024 * 1024):
         return r.read(limit)
 
 
+_img_tls = threading.local()
+
+
+def fetch_bytes_fast(url, timeout=12, limit=8 * 1024 * 1024, tries=3):
+    """Like fetch_bytes but over a kept-alive connection per thread (no new TLS handshake for every picture) and with
+    retries for short network hiccups."""
+    import http.client
+    from urllib.parse import urlsplit
+    u = urlsplit(url)
+    if u.scheme not in ("http", "https") or not u.netloc:
+        raise OnlineError("bad address")
+    path = u.path + ("?" + u.query if u.query else "")
+    pool = getattr(_img_tls, "pool", None)
+    if pool is None:
+        pool = _img_tls.pool = {}
+    last = None
+    for attempt in range(tries):
+        c = pool.get(u.netloc)
+        if c is None:
+            cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
+            c = pool[u.netloc] = cls(u.netloc, timeout=timeout)
+        try:
+            c.request("GET", path, headers={"User-Agent": USER_AGENT, "Accept": "*/*"})
+            r = c.getresponse()
+            data = r.read(limit)
+            if r.status in (301, 302, 307, 308) and r.headers.get("Location"):
+                return fetch_bytes(r.headers["Location"], timeout, limit)
+            if r.status >= 400:
+                if r.status in (429, 500, 502, 503, 504) and attempt < tries - 1:
+                    time.sleep(0.4 * (attempt + 1))
+                    continue
+                raise OnlineError(f"HTTP {r.status}")
+            return data
+        except OnlineError:
+            raise
+        except Exception as exc:
+            last = exc
+            try:
+                c.close()
+            except Exception:
+                pass
+            pool.pop(u.netloc, None)
+            time.sleep(0.25 * (attempt + 1))
+    raise last or OnlineError("download failed")
+
+
 def find_ffmpeg():
     """Path of an ffmpeg executable (pip `imageio-ffmpeg`, bundled next to the app, or on PATH) or None."""
     base = getattr(sys, "_MEIPASS", None)
@@ -476,6 +522,7 @@ def _watch_url(item):
 _resolve_cache = {}
 _resolve_lock = threading.Lock()
 _fast_ok = [True]
+_fast_off_at = [0.0]
 RESOLVE_TTL = 20 * 60
 
 
@@ -559,7 +606,7 @@ def is_network_error(exc):
     low = str(exc).lower()
     return any(k in low for k in ("getaddrinfo", "name or service", "timed out", "network is unreachable",
                                   "failed to resolve", "connection reset", "temporary failure", "no route to host",
-                                  "remote end closed", "connection aborted", "unable to download"))
+                                  "remote end closed", "connection aborted"))
 
 
 def _json_post_keepalive(host, path, payload, headers, timeout=8):
@@ -726,6 +773,8 @@ def _resolve_uncached(item):
     try:
         yt = _ytdlp()
         info = None
+        if not _fast_ok[0] and time.monotonic() - _fast_off_at[0] > 90:
+            _fast_ok[0] = True                       # one unavailable video must not slow down every later song
         if _fast_ok[0]:
             try:
                 info = _extract_stream(yt, _watch_url(item), True)
@@ -736,6 +785,7 @@ def _resolve_uncached(item):
                 if is_network_error(exc):
                     raise
                 _fast_ok[0] = False
+                _fast_off_at[0] = time.monotonic()
         if info is None:
             info = _extract_stream(yt, _watch_url(item), False)
         url = info.get("url")
@@ -819,6 +869,8 @@ def fetch_audio_file(url, dest_dir, stem, cancelled, chunk=1 << 20, limit=60 << 
                     data = r.read(limit)
                     cr = r.headers.get("Content-Range", "")
                     if r.status == 200:                       # server ignored the range: whole file
+                        if start > 0:
+                            raise OnlineError("The server does not support partial downloads.")
                         f.write(data)
                         break
                     total = int(cr.rsplit("/", 1)[-1]) if "/" in cr and cr.rsplit("/", 1)[-1].isdigit() else start + len(data)

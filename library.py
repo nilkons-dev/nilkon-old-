@@ -14,12 +14,15 @@ ALL = "All Tracks"
 LIKED = "Liked Songs"
 RECENT = "Recently Played"
 RESERVED = (ALL, LIKED, RECENT)
+SORT_MODES = {"custom": "Custom order", "title": "Title", "artist": "Artist", "duration": "Duration",
+              "newest": "Recently added"}
 EQ_BANDS = 10
 HISTORY_MAX = 60
 
 DEFAULT_SETTINGS = {
     "mode": "dark",            # dark | light
-    "accent": "Cat Orange",    # key of theme.ACCENTS
+    "accent": "Crimson",       # key of theme.ACCENTS (red + black by default)
+    "ui_rev": 2,               # bumped when a new default look is introduced
     "adaptive": False,         # tint the UI from album art
     "background": "aurora",    # aurora | midnight | deepspace | bluehaze | custom
     "custom_bg": "",
@@ -117,6 +120,7 @@ class Library:
         self.tracks = []
         self.playlists = {}          # name -> [paths]   (never contains the reserved names)
         self.playlist_covers = {}    # playlist name -> picture file chosen by the user
+        self.collection_sort = {}    # collection / playlist name -> key of SORT_MODES
         self.liked = []
         self.meta = {}
         self.history = []            # most recent first
@@ -195,6 +199,9 @@ class Library:
                 self.playlists[name] = list(dict.fromkeys(p for p in items if p in tset))
         pc_ = data.get("playlist_covers", {})
         self.playlist_covers = {k: v for k, v in pc_.items() if k in self.playlists and isinstance(v, str)} if isinstance(pc_, dict) else {}
+        cs_ = data.get("collection_sort", {})
+        self.collection_sort = {k: v for k, v in cs_.items() if isinstance(k, str) and v in SORT_MODES and v != "custom"
+                                and (k in self.playlists or k in (ALL, LIKED))} if isinstance(cs_, dict) else {}
         meta = data.get("meta", {})
         self.meta = {k: v for k, v in meta.items() if k in tset and isinstance(v, dict)} if isinstance(meta, dict) else {}
         for k, it in self.online_meta.items():
@@ -226,6 +233,9 @@ class Library:
             for k, default in DEFAULT_SETTINGS.items():
                 if k in raw and isinstance(raw[k], type(default)):
                     st[k] = raw[k]
+        if isinstance(raw, dict) and int(raw.get("ui_rev", 0) or 0) < 2:
+            st["accent"] = "Crimson"                  # new default look (red + black), applied once
+            st["ui_rev"] = 2
         # legacy keys
         if "volume" in data and isinstance(data["volume"], (int, float)) and "volume" not in (raw if isinstance(raw, dict) else {}):
             st["volume"] = int(data["volume"])
@@ -268,7 +278,7 @@ class Library:
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
             payload = {
-                "version": 2, "tracks": self.tracks, "liked": self.liked, "playlists": self.playlists, "playlist_covers": self.playlist_covers,
+                "version": 2, "tracks": self.tracks, "liked": self.liked, "playlists": self.playlists, "playlist_covers": self.playlist_covers, "collection_sort": self.collection_sort,
                 "meta": {k: v for k, v in self.meta.items() if not is_online(k)}, "history": self.history, "play_counts": self.play_counts,
                 "track_eq": self.track_eq, "eq_presets": self.eq_presets, "downloads": self.downloads, "online": self._referenced_online(), "eq": self.eq, "settings": self.settings,
                 "last_path": self.last_path, "last_pos": int(self.last_pos),
@@ -422,10 +432,13 @@ class Library:
         self.playlists = {(new if k == old else k): v for k, v in self.playlists.items()}
         if old in self.playlist_covers and new != old:
             self.playlist_covers[new] = self.playlist_covers.pop(old)
+        if old in self.collection_sort and new != old:
+            self.collection_sort[new] = self.collection_sort.pop(old)
         return True, ""
 
     def delete_playlist(self, name):
         self.playlist_covers.pop(name, None)
+        self.collection_sort.pop(name, None)
         return self.playlists.pop(name, None) is not None
 
     def add_to_playlist(self, name, path):
@@ -442,14 +455,36 @@ class Library:
             return True
         return False
 
+    def sort_mode(self, name):
+        return self.collection_sort.get(name, "custom") if name != RECENT else "custom"
+
+    def set_sort_mode(self, name, mode):
+        if name == RECENT or mode not in SORT_MODES:
+            return
+        if mode == "custom":
+            self.collection_sort.pop(name, None)
+        else:
+            self.collection_sort[name] = mode
+
     def collection(self, name):
         if name == ALL:
-            return list(self.tracks)
-        if name == LIKED:
-            return list(self.liked)
-        if name == RECENT:
+            items = list(self.tracks)
+        elif name == LIKED:
+            items = list(self.liked)
+        elif name == RECENT:
             return list(self.history)
-        return list(self.playlists.get(name, []))
+        else:
+            items = list(self.playlists.get(name, []))
+        mode = self.collection_sort.get(name, "custom")
+        if mode == "title":
+            items.sort(key=lambda p: (self.title(p) or "").casefold())
+        elif mode == "artist":
+            items.sort(key=lambda p: ((self.artist(p) or "").casefold(), (self.title(p) or "").casefold()))
+        elif mode == "duration":
+            items.sort(key=lambda p: self.duration(p) or 0)
+        elif mode == "newest":
+            items.reverse()
+        return items
 
     def reorder(self, name, visible_order):
         """Apply a drag-and-drop order of the *visible* items of a collection.

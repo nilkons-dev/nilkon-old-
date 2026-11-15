@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListW
                                QStyledItemDelegate, QStackedWidget, QAbstractItemView)
 
 from icons import draw_icon, qicon
-from shelves import ShelvesView
+from shelves import ShelvesView, SkeletonList
 from theme import T, alpha, ink, hsv, nice_time, text_baseline
 from tracklist import draw_thumb
 from visuals import draw_mini_bars
@@ -318,6 +318,8 @@ class OnlinePage(QWidget):
         self.shelves.playRequested.connect(self.playRequested)
         self.shelves.menuRequested.connect(self.menuRequested)
         self.stack.addWidget(self.shelves)
+        self.skeleton = SkeletonList()
+        self.stack.addWidget(self.skeleton)                       # index 3: a search is running
         lay.addWidget(self.stack, 1)
         self.show_message("idle")
 
@@ -348,6 +350,9 @@ class OnlinePage(QWidget):
         return self.host.remote_images.get(item["thumb_url"], 120)
 
     def show_message(self, kind, text=""):
+        if kind == "loading":
+            self.stack.setCurrentIndex(3)                  # grey placeholder rows instead of a message
+            return
         icons = {"idle": "globe", "loading": "clock", "error": "info", "empty": "search"}
         titles = {"idle": "Find any song", "loading": "Searching…",
                   "error": "Couldn't search", "empty": "No songs found"}

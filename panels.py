@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, QRectF, QPointF, QPoint, QSize
 from PySide6.QtGui import QPainter, QFont, QFontMetrics, QPixmap, QPen, QColor
 from PySide6.QtWidgets import QWidget, QStyledItemDelegate, QStyle, QListWidget
 
-from cat_widgets import CatLogo
+from logo_widget import LogoMark
 from icons import draw_icon
 from theme import T, alpha, ink, text_baseline
 from tracklist import draw_thumb
@@ -14,9 +14,6 @@ from visuals import draw_mini_bars
 from widgets import ui_font, round_path, NOBRUSH, NOPEN, AA
 
 ASSETS = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "assets"
-
-
-LogoMark = CatLogo          # the animated cat logo (kept under the old name for existing call sites)
 
 
 class WordMark(QWidget):

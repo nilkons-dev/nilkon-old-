@@ -1,5 +1,6 @@
 """Qt glue for the online sources: background jobs and remote thumbnails."""
 import hashlib
+import os
 from pathlib import Path
 import threading
 import time
@@ -127,8 +128,8 @@ class OnlineJobs(QObject):
     def import_entries(self, name, entries):
         """Turns a list of wanted songs (from a share code / Spotify CSV) into online songs, matching by search."""
         with self._lock:
-            self._token += 1
-            token = self._token
+            self._imp_token = getattr(self, "_imp_token", 0) + 1
+            token = self._imp_token
         self._submit(self._import, token, name, list(entries))
         return token
 
@@ -165,10 +166,20 @@ class OnlineJobs(QObject):
                     n = done[0]
                 if n == total or n % 3 == 0:
                     self._emit("importProgress", token, n, total)
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            list(pool.map(one, range(total)))
+        try:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                list(pool.map(lambda i: self._safe_one(one, i), range(total)))
+        except Exception:
+            pass
         items = [x for x in out if x]
         self._emit("importDone", token, name, items, total - len(items))
+
+    @staticmethod
+    def _safe_one(fn, i):
+        try:
+            fn(i)
+        except Exception:
+            pass
 
     def related(self, item):
         self._submit(self._related, item)
@@ -377,10 +388,12 @@ class RemoteImages(QObject):
         if not data:
             try:
                 url = online.sized(k[0], 200 if k[1] <= 200 else 544)
-                data = online.fetch_bytes(url)
+                data = online.fetch_bytes_fast(url)
                 if data and f is not None:
                     try:
-                        f.write_bytes(data)
+                        tmp = f.with_suffix(".tmp")
+                        tmp.write_bytes(data)
+                        os.replace(tmp, f)
                     except OSError:
                         pass
             except Exception:
@@ -402,6 +415,12 @@ class RemoteImages(QObject):
                     img = None
             if img is None:
                 self._failed[k] = time.monotonic()
+                try:                                      # a damaged cached picture must not fail forever
+                    ff = self._file(k)
+                    if ff is not None and ff.is_file():
+                        ff.unlink()
+                except OSError:
+                    pass
                 continue
             self._mem[k] = QPixmap.fromImage(img)
             got = True

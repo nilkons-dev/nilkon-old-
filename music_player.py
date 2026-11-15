@@ -40,6 +40,31 @@ except Exception as _exc:  # reported nicely once the QApplication exists
     vlc = None
     VLC_ERROR = _exc
 
+_VLC_BASE_ARGS = ["--no-video", "--quiet", "--no-osd", "--no-stats", "--no-metadata-network-access"]
+_prewarm = {"instance": None, "thread": None}
+
+
+def _prewarm_vlc():
+    """Scanning VLC's plugins is the slowest part of start-up, so it runs in the background while the window is built."""
+    try:
+        _prewarm["instance"] = vlc.Instance(*_VLC_BASE_ARGS)
+    except Exception:
+        _prewarm["instance"] = None
+
+
+def _prewarm_ytdlp():
+    try:
+        import online as _online
+        _online._ytdlp()
+    except Exception:
+        pass
+
+
+threading.Thread(target=_prewarm_ytdlp, name="ytdlp-prewarm", daemon=True).start()
+if vlc is not None:
+    _prewarm["thread"] = threading.Thread(target=_prewarm_vlc, name="vlc-prewarm", daemon=True)
+    _prewarm["thread"].start()
+
 from collections import OrderedDict
 from PySide6.QtCore import Qt, QEvent, QFile, QPropertyAnimation, QEasingCurve, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QColor, QFont, QIcon, QKeySequence, QLinearGradient, QPainter, QPixmap, QRadialGradient, QShortcut
@@ -56,7 +81,7 @@ from engine import VisualEngine
 from eq_dialog import EqualizerDialog
 from home import HomePage
 from icons import qicon
-from library import Library, ALL, LIKED, RECENT, is_online, effective_preamp
+from library import Library, ALL, LIKED, RECENT, SORT_MODES, is_online, effective_preamp
 import crashlog
 import online
 from taste import Taste
@@ -177,13 +202,20 @@ class MusicPlayer(QMainWindow):
         for k, it in self.lib.online_meta.items():
             self.online_items[k] = dict(it)
 
-        _args = ["--no-video", "--quiet", "--no-osd", "--no-stats", "--no-metadata-network-access"]
+        _args = list(_VLC_BASE_ARGS)
+        self.instance = None
         if self.lib.settings.get("normalize"):
             _args += ["--audio-filter=normvol", "--norm-buff-size=20", "--norm-max-level=2.0"]
-        try:
-            self.instance = vlc.Instance(*_args)
-        except Exception:
-            self.instance = vlc.Instance("--no-video", "--quiet")
+        else:
+            th = _prewarm.get("thread")
+            if th is not None:
+                th.join(20)
+            self.instance, _prewarm["instance"] = _prewarm.get("instance"), None
+        if self.instance is None:
+            try:
+                self.instance = vlc.Instance(*_args)
+            except Exception:
+                self.instance = vlc.Instance("--no-video", "--quiet")
         self.player = self.instance.media_player_new()
         self.engine = VisualEngine(self)
         self.covers = CoverCache(self.lib.dir, self)
@@ -542,6 +574,7 @@ class MusicPlayer(QMainWindow):
         self.hero.shuffleClicked.connect(self.shuffle_collection)
         self.hero.coverClicked.connect(lambda: self.choose_playlist_cover(self.current_collection))
         self.hero.shareClicked.connect(lambda: self.share_playlist_code(self.current_collection))
+        self.hero.sortClicked.connect(self.sort_menu)
         lay.addWidget(self.hero)
         self.col_wave = WaveField(self.engine)               # kept (not shown) for the code that updates it
         self.col_wave.hide()
@@ -770,13 +803,14 @@ class MusicPlayer(QMainWindow):
     # -- online: personal suggestions ("Made for you") ---------------------------------------------
     def _show_discover(self, force=False):
         """The Online page without a search: rows of songs picked from what the user searches, plays and likes."""
-        fresh = self._suggest_shelves and _time.monotonic() - self._suggest_t < 600
-        if fresh and not force:
+        if self._suggest_shelves:                       # what we have is shown at once (even if a bit old) ...
             self.online_results = list(self._suggest_items)
             self.online.set_discover(True, self._suggest_label)
-            self.online.set_shelves(self._suggest_shelves)
-            return
-        self.request_suggestions()
+            if self.online.stack.currentIndex() != 2 or not self.online.shelves.column.shelves:
+                self.online.set_shelves(self._suggest_shelves)
+            if not force and _time.monotonic() - self._suggest_t < 600:
+                return
+        self.request_suggestions()                      # ... and refreshed in the background
 
     def refresh_suggestions_online(self):
         self._show_discover(force=True)
@@ -1007,7 +1041,7 @@ class MusicPlayer(QMainWindow):
         self.tracklist.setUpdatesEnabled(True)
         sb.setValue(pos)
         searching = bool(self.search.text().strip())
-        self.tracklist.set_reorder_enabled(name != RECENT and not searching)
+        self.tracklist.set_reorder_enabled(name != RECENT and not searching and self.lib.sort_mode(name) == "custom")
         self.collection_title.setText(self._collection_title(name))
         self._update_count(len(paths))
         self._update_hero(paths)
@@ -1071,7 +1105,30 @@ class MusicPlayer(QMainWindow):
                 break
         self.hero.set_content(kind, self._collection_title(name), self.collection_count.text(),
                               self.playlist_cover_pm(name) if is_pl else None, mosaic, can_edit=is_pl,
-                              can_play=bool(paths), tint=tint)
+                              can_play=bool(paths), tint=tint,
+                              sort_label="" if name == RECENT else "Sort: " + SORT_MODES[self.lib.sort_mode(name)])
+
+    def sort_menu(self, pos):
+        name = self.current_collection
+        if name == RECENT:
+            return
+        menu = style_menu(QMenu(self))
+        cur = self.lib.sort_mode(name)
+        head = menu.addAction("Sort by")
+        head.setEnabled(False)
+        acts = {}
+        for key, label in SORT_MODES.items():
+            a = menu.addAction(("✓  " if key == cur else "      ") + label)
+            acts[a] = key
+        chosen = menu.exec(pos)
+        if chosen in acts and acts[chosen] != cur:
+            self.lib.set_sort_mode(name, acts[chosen])
+            self.save_soon()
+            self.refresh_collection(keep_scroll=False)
+            if self.queue_name == name:
+                self.queue_paths = self.lib.collection(name)
+                self.refresh_queue()
+            self.toast_msg("Sorted by " + SORT_MODES[acts[chosen]].lower() if acts[chosen] != "custom" else "Custom order restored", 1600)
 
     def choose_playlist_cover(self, name):
         if name not in self.lib.playlists:
@@ -1559,6 +1616,28 @@ class MusicPlayer(QMainWindow):
             eng.set_playing(False)
             self._error_count = 0
             self.advance_track(auto=True)
+        # a stream that stops moving (frozen position) must never loop its last second: near the end go on to the
+        # next song, elsewhere reconnect
+        if is_online(self.current_path) and not self.loading_key and state in (vlc.State.Playing, vlc.State.Buffering):
+            now_s = _time.monotonic()
+            last = getattr(self, "_pos_seen", None)
+            if last is None or last[0] != self.current_path or abs(tm - last[1]) > 400:
+                self._pos_seen = (self.current_path, tm, now_s)
+            else:
+                dur_s = self.lib.duration(self.current_path) or int(length or 0)
+                frozen = now_s - last[2]
+                near_end = dur_s > 0 and tm >= dur_s - 8000
+                if (near_end and frozen > 3.5) or frozen > 14.0:
+                    self._pos_seen = None
+                    if near_end:
+                        eng.set_playing(False)
+                        self._error_count = 0
+                        self.advance_track(auto=True)
+                    else:
+                        self._on_playback_error()
+                    return
+        else:
+            self._pos_seen = None
         if state == vlc.State.Buffering and is_online(self.current_path) and not self.loading_key:
             now = _time.monotonic()
             if not self._buf_t:

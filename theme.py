@@ -64,6 +64,7 @@ def text_baseline(fm, rect_top, rect_height):
 
 # name -> (colour 1, colour 2, colour 3).  Colour 1 is the main accent.
 ACCENTS = {
+    "Crimson": ("#F0283C", "#FF5C4D", "#C1121F"),
     "Cat Orange": ("#FF9468", "#FFB596", "#F59E0B"),
     "Nilkon Blue": ("#3B82F6", "#22D3EE", "#6366F1"),
     "Deep Ocean": ("#2563EB", "#0EA5E9", "#38BDF8"),
@@ -73,7 +74,7 @@ ACCENTS = {
     "Neon": ("#F43F5E", "#A855F7", "#22D3EE"),
     "Ice": ("#E0F2FE", "#7DD3FC", "#A5B4FC"),
 }
-DEFAULT_ACCENT = "Cat Orange"
+DEFAULT_ACCENT = "Crimson"
 
 
 class Theme:
