@@ -108,7 +108,7 @@ class CollectionHero(QWidget):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        if self._search_open:
+        if getattr(self, "_search_open", False):
             self._place_field()
 
     def refresh_theme(self):

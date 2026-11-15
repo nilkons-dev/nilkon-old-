@@ -59,6 +59,11 @@ Data is stored in `~/.nilkon_music`. Renaming a song changes its display name on
 - Waves for local and online songs start within a fraction of a second (progressive analysis) and no longer jump when the analysis completes.
 - Buttons, sliders and menus now follow the song colours.
 
+## 1.13.1 - fix
+- Fixed: "NILKON could not start ... PosterBand has no attribute _timers" (poster strip on Explore).
+- Faster start: slow non-Qt modules (numpy, audio analysis, tags, stream proxy ...) load in the background while the window
+  is built; the build removes unused Qt files (fewer files for Windows Defender to check on the first start).
+
 ## 1.13.0 - Oswald, poster band, new side bar
 - Font: Oswald everywhere (bundled, SIL OFL licence in assets/fonts).
 - Side bar: Overview, Explore, Library, Favorites, History with new icons that play a short animation when clicked;

@@ -79,6 +79,7 @@ def main() -> None:
     if not exe.exists():
         sys.exit("Build failed: NILKON.exe was not created.")
     print("App built:", exe)
+    prune_app(exe.parent)
     sign(exe)
 
     iscc = shutil.which("iscc") or next((p for p in (r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",

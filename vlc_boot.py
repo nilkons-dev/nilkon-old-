@@ -43,6 +43,14 @@ def _prewarm_vlc():
 
 
 def _prewarm_ytdlp():
+    """Imports the slow non-Qt modules in the background while the window is being built (a module that is still
+    loading is simply waited for by the main thread, so nothing can go wrong - it only gets faster)."""
+    for name in ("online", "numpy", "miniaudio", "mutagen", "audio_analysis", "tags", "stream_proxy", "fastfetch",
+                 "taste", "playlist_share", "presence"):
+        try:
+            __import__(name)
+        except Exception:
+            pass
     try:
         import online as _online
         _online._ytdlp()

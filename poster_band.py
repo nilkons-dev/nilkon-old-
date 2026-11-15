@@ -48,23 +48,23 @@ class PosterBand(QWidget):
         self._scaled = {}           # (file, w, h, dpr) -> QPixmap cropped to fill the box
         for s in (self.banner, self.card):
             s.cur = s.pick()
-        self.has_posters = bool(self.banner.files or self.card.files)
-        self.setVisible(self.has_posters)
         self._timers = []
         for slot, every in ((self.banner, 7000), (self.card, 9000)):
             tm = QTimer(self)
             tm.setSingleShot(True)
             tm.timeout.connect(lambda s=slot, e=every: self._advance(s, e))
             self._timers.append((tm, every))
+        self.has_posters = bool(self.banner.files or self.card.files)
+        self.setVisible(self.has_posters)
 
     # -- timing ------------------------------------------------------------------------------------------
     def showEvent(self, e):
-        for i, (tm, every) in enumerate(self._timers):
+        for i, (tm, every) in enumerate(getattr(self, "_timers", ())):
             tm.start(every // 2 + i * 1800)
         super().showEvent(e)
 
     def hideEvent(self, e):
-        for tm, _e in self._timers:
+        for tm, _e in getattr(self, "_timers", ()):
             tm.stop()
         super().hideEvent(e)
 
