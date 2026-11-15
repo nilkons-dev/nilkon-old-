@@ -254,7 +254,7 @@ class SettingsDialog(GlassDialog):
     """host must provide: lib, engine, apply_setting(key), open_equalizer(), clear_recent(),
     reset_listen_counts(), pick_custom_background() -> bool, background_preview(name) -> QPixmap|None."""
 
-    def __init__(self, parent, host, start_page=0):
+    def __init__(self, parent, host, start_page=0, about_only=False):
         super().__init__(parent)
         self.host = host
         self.lib = host.lib
@@ -266,13 +266,13 @@ class SettingsDialog(GlassDialog):
 
         head = QHBoxLayout()
         ic = QLabel()
-        ic.setPixmap(qicon("settings", T.c1.lighter(115) if T.dark else T.c1.darker(115), 24).pixmap(24, 24))
+        ic.setPixmap(qicon("info" if about_only else "settings", T.c1.lighter(115) if T.dark else T.c1.darker(115), 24).pixmap(24, 24))
         head.addWidget(ic)
         tv = QVBoxLayout()
         tv.setSpacing(0)
-        t = QLabel("Settings")
+        t = QLabel("About" if about_only else "Settings")
         t.setObjectName("dlgTitle")
-        sub = QLabel("Make NILKON look and sound the way you like")
+        sub = QLabel("Version, credits and diagnostics" if about_only else "Make NILKON look and sound the way you like")
         sub.setObjectName("dlgSub")
         tv.addWidget(t)
         tv.addWidget(sub)
@@ -298,14 +298,19 @@ class SettingsDialog(GlassDialog):
             b = GButton(label, icon, "nav", 18)
             b.setFixedWidth(168)
             b.clicked.connect(lambda _=False, ix=i: self._go(ix))
-            nav.addWidget(b)
+            if about_only or label != "About":          # About has its own entry in the side bar
+                nav.addWidget(b)
+            else:
+                b.hide()
             self.nav_btns.append(b)
+            if about_only:
+                b.hide()
             self.pages.addWidget(self._scroll(builder()))
         nav.addStretch(1)
         body.addLayout(nav)
         body.addWidget(self.pages, 1)
         outer.addLayout(body, 1)
-        self._go(start_page)
+        self._go(6 if about_only else start_page)
         self._sync()
         self._status_timer = QTimer(self)
         self._status_timer.timeout.connect(self._sync_status)

@@ -364,6 +364,7 @@ class WaveField(QWidget):
         self.engine = engine
         self.setMinimumHeight(60)
         self.wave_style = "waves"   # waves | bars | mirror
+        self._geo = None            # cached gradients / x positions for the current size and colours
         engine.tick.connect(self._tick)
 
     def set_wave_style(self, name):
@@ -371,7 +372,7 @@ class WaveField(QWidget):
         self.update()
 
     def _tick(self):
-        if self.isVisible():
+        if self.isVisible() and not self.window().isMinimized():
             self.update()
 
     def _paint_bars(self, p, mirror):
@@ -410,65 +411,80 @@ class WaveField(QWidget):
             self._paint_bars(p, self.wave_style == "mirror")
             return
         mid = h / 2.0
-        grad = QLinearGradient(0, 0, w, 0)
-        grad.setColorAt(0.0, alpha(T.c1, 0.0))
-        grad.setColorAt(0.18, T.c1)
-        grad.setColorAt(0.5, T.c2)
-        grad.setColorAt(0.82, T.c3)
-        grad.setColorAt(1.0, alpha(T.c3, 0.0))
-        brush = QBrush(grad)
-        step = 5.0
-        count = int(w / step) + 1
+        key = (int(w), int(h), T.c1.rgba(), T.c2.rgba(), T.c3.rgba())
+        if self._geo is None or self._geo[0] != key:
+            grad = QLinearGradient(0, 0, w, 0)
+            grad.setColorAt(0.0, alpha(T.c1, 0.0))
+            grad.setColorAt(0.18, T.c1)
+            grad.setColorAt(0.5, T.c2)
+            grad.setColorAt(0.82, T.c3)
+            grad.setColorAt(1.0, alpha(T.c3, 0.0))
+            fg = QLinearGradient(0, 0, w, 0)
+            fg.setColorAt(0.0, alpha(T.c1, 0.0))
+            fg.setColorAt(0.3, alpha(T.c1, 0.22))
+            fg.setColorAt(0.5, alpha(T.c2, 0.26))
+            fg.setColorAt(0.7, alpha(T.c3, 0.22))
+            fg.setColorAt(1.0, alpha(T.c3, 0.0))
+            step = max(6.0, w / 170.0)                  # about 170 points are plenty for a smooth outline
+            count = int(w / step) + 1
+            xs = [min(w, i * step) for i in range(count)]
+            fr = [x / w for x in xs]
+            dist = [abs(2.0 * f - 1.0) * (N - 1) for f in fr]
+            win = [math.sin(math.pi * f) ** 0.75 for f in fr]
+            self._geo = (key, QBrush(grad), QBrush(fg), xs, fr, dist, win)
+        _k, brush, fill_brush, xs, fr, dist, win = self._geo
+        count = len(xs)
         hist = eng.hist
         t = eng.t
-        # Each layer shows the *actual* spectrum of the song, a few frames older than the last one,
-        # so the outline swells on every kick and trails away behind it. Bass sits in the centre.
+        playing = eng.play_t > 0.01
+        hh = h * 0.46
+        two_pi_36 = 36.0
+        # Each layer shows the actual spectrum of the song, a few frames older than the last one, so the outline swells
+        # on every kick and trails away behind it. Bass sits in the centre.
         for li, (lag, a, lw, scale) in enumerate(((0, 0.95, 2.4, 1.0), (3, 0.55, 1.7, 0.80),
                                                    (6, 0.34, 1.3, 0.62), (10, 0.22, 1.0, 0.46))):
-            if len(hist) > lag:
-                frame = hist[-1 - lag]
-            else:
-                frame = eng.levels
-            amps = []
-            for i in range(count):
-                x = min(w, i * step)
-                f = x / w
-                d = abs(2.0 * f - 1.0)
-                lv = level_at(frame, d)
-                window = math.sin(math.pi * f) ** 0.75
-                base = (lv ** 0.9) * scale * (h * 0.46) * window
-                ripple = math.sin(f * 36.0 + t * 2.4 + li * 1.7) * 0.07 * base
-                amps.append(max(0.8, base + ripple) if eng.play_t > 0.01 else 0.8)
-            sm = [amps[0]] + [(amps[i - 1] + 2.0 * amps[i] + amps[i + 1]) * 0.25 for i in range(1, count - 1)] + [amps[-1]]
+            frame = hist[-1 - lag] if len(hist) > lag else eng.levels
+            amps = [0.8] * count
+            if playing:
+                amp_k = scale * hh
+                ph = t * 2.4 + li * 1.7
+                for i in range(count):
+                    x = dist[i]
+                    k = int(x)
+                    k2 = k + 1 if k + 1 < N else k
+                    lv = frame[k] + (frame[k2] - frame[k]) * (x - k)
+                    base = (lv ** 0.9) * amp_k * win[i]
+                    v = base + math.sin(fr[i] * two_pi_36 + ph) * 0.07 * base
+                    amps[i] = v if v > 0.8 else 0.8
             top = QPainterPath()
             bottom = QPainterPath()
-            for i in range(count):
-                x = min(w, i * step)
-                if i == 0:
-                    top.moveTo(x, mid - sm[i])
-                    bottom.moveTo(x, mid + sm[i])
-                else:
-                    top.lineTo(x, mid - sm[i])
-                    bottom.lineTo(x, mid + sm[i])
-            for path, op, width in ((top, a * 0.25, lw * 4.5), (top, a, lw), (bottom, a * 0.25, lw * 4.5), (bottom, a * 0.8, lw)):
-                p.setBrush(NOBRUSH)
-                p.setOpacity(op)
-                p.setPen(QPen(brush, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-                p.drawPath(path)
+            top.moveTo(xs[0], mid - amps[0])
+            bottom.moveTo(xs[0], mid + amps[0])
+            for i in range(1, count - 1):
+                sm = (amps[i - 1] + 2.0 * amps[i] + amps[i + 1]) * 0.25
+                top.lineTo(xs[i], mid - sm)
+                bottom.lineTo(xs[i], mid + sm)
+            top.lineTo(xs[-1], mid - amps[-1])
+            bottom.lineTo(xs[-1], mid + amps[-1])
+            p.setBrush(NOBRUSH)
+            if li == 0:                                          # one soft glow, only on the main layer
+                for path in (top, bottom):
+                    p.setOpacity(a * 0.22)
+                    p.setPen(QPen(brush, lw * 4.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+                    p.drawPath(path)
+            pen = QPen(brush, lw, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+            p.setPen(pen)
+            p.setOpacity(a)
+            p.drawPath(top)
+            p.setOpacity(a * 0.8)
+            p.drawPath(bottom)
             if li == 0:
                 fill = QPainterPath(top)
-                for i in range(count - 1, -1, -1):
-                    fill.lineTo(min(w, i * step), mid + sm[i])
+                fill.connectPath(bottom.toReversed())
                 fill.closeSubpath()
-                fg = QLinearGradient(0, 0, w, 0)
-                fg.setColorAt(0.0, alpha(T.c1, 0.0))
-                fg.setColorAt(0.3, alpha(T.c1, 0.22))
-                fg.setColorAt(0.5, alpha(T.c2, 0.26))
-                fg.setColorAt(0.7, alpha(T.c3, 0.22))
-                fg.setColorAt(1.0, alpha(T.c3, 0.0))
                 p.setOpacity(1.0)
                 p.setPen(NOPEN)
-                p.fillPath(fill, QBrush(fg))
+                p.fillPath(fill, fill_brush)
         p.setOpacity(1.0)
 
 

@@ -3,12 +3,12 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QRectF, QPointF, QPoint, QSize
-from PySide6.QtGui import QPainter, QFont, QFontMetrics, QPixmap, QPen, QColor
+from PySide6.QtGui import QPainter, QFont, QFontMetrics, QPixmap, QPen, QColor, QLinearGradient, QBrush
 from PySide6.QtWidgets import QWidget, QStyledItemDelegate, QStyle, QListWidget
 
 from logo_widget import LogoMark
 from icons import draw_icon
-from theme import T, alpha, ink, text_baseline
+from theme import T, alpha, ink, text_baseline, hue_for, hsv
 from tracklist import draw_thumb
 from visuals import draw_mini_bars
 from widgets import ui_font, round_path, NOBRUSH, NOPEN, AA
@@ -160,7 +160,7 @@ class PlaylistDelegate(QStyledItemDelegate):
         self.f2 = ui_font(11, QFont.Weight.Normal)
 
     def sizeHint(self, option, index):
-        return QSize(100, 42)
+        return QSize(100, 64)
 
     def paint(self, p, option, index):
         rect = QRectF(option.rect)
@@ -171,36 +171,44 @@ class PlaylistDelegate(QStyledItemDelegate):
         p.save()
         p.setRenderHint(AA)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-        row = round_path(rect.adjusted(1, 2, -1, -2), 12)
+        row = round_path(rect.adjusted(1, 2, -1, -2), 13)
         if sel:
-            p.fillPath(row, alpha(T.c1, 0.18))
+            p.fillPath(row, alpha(T.c1, 0.16))
             p.setBrush(NOBRUSH)
-            p.setPen(QPen(alpha(T.c1, 0.38), 1))
+            p.setPen(QPen(alpha(T.c1, 0.34), 1))
             p.drawPath(row)
         elif hover:
             p.fillPath(row, ink(0.07))
         cy = rect.center().y()
         accent = T.c1.lighter(120) if T.dark else T.c1.darker(115)
+        # big cover (48 px): the picture chosen for the playlist, or a coloured tile with a list icon
+        ts = 48.0
+        tr = QRectF(rect.left() + 9, cy - ts / 2.0, ts, ts)
         thumb = self.host.playlist_cover_pm(name) if hasattr(self.host, "playlist_cover_pm") else None
-        text_x = 38
         if thumb is not None and not thumb.isNull():
-            tr = QRectF(rect.left() + 8, cy - 14, 28, 28)
             p.save()
-            p.setClipPath(round_path(tr, 7))
+            p.setClipPath(round_path(tr, 9))
             s_ = min(thumb.width(), thumb.height())
             p.drawPixmap(tr, thumb, QRectF((thumb.width() - s_) / 2.0, (thumb.height() - s_) / 2.0, s_, s_))
             p.restore()
-            text_x = 46
         else:
-            draw_icon(p, "list-music", QRectF(rect.left() + 12, cy - 8, 16, 16), accent if sel else ink(0.60))
+            g = QLinearGradient(tr.topLeft(), tr.bottomRight())
+            hc = hue_for(str(name))
+            g.setColorAt(0.0, hsv(hc, 0.55, 0.62 if T.dark else 0.88))
+            g.setColorAt(1.0, hsv(hc + 0.08, 0.65, 0.30 if T.dark else 0.70))
+            p.fillPath(round_path(tr, 9), QBrush(g))
+            draw_icon(p, "list-music", QRectF(tr.center().x() - 11, tr.center().y() - 11, 22, 22), QColor(255, 255, 255, 235))
+        text_x = tr.right() - rect.left() + 12
         fm, fm2 = QFontMetrics(self.f), QFontMetrics(self.f2)
-        ctxt = str(count if count is not None else "")
-        cw = fm2.horizontalAdvance(ctxt)
-        p.setFont(self.f2)
-        p.setPen(ink(0.45))
-        p.drawText(QPointF(rect.right() - 12 - cw, text_baseline(fm2, rect.top(), rect.height())), ctxt)
+        n = int(count) if isinstance(count, (int, float)) else 0
+        sub = f"Playlist \u00b7 {n} song{'' if n == 1 else 's'}"
+        avail = int(max(20, rect.width() - text_x - 12))
         p.setFont(self.f)
-        p.setPen(ink(0.98) if sel else ink(0.78))
-        p.drawText(QPointF(rect.left() + text_x, text_baseline(fm, rect.top(), rect.height())),
-                   fm.elidedText(str(name), Qt.TextElideMode.ElideRight, int(max(20, rect.width() - text_x - cw - 24))))
+        p.setPen(accent if sel else ink(0.94))
+        p.drawText(QPointF(rect.left() + text_x, cy - 3), fm.elidedText(str(name), Qt.TextElideMode.ElideRight, avail))
+        p.setFont(self.f2)
+        p.setPen(ink(0.52))
+        p.drawText(QPointF(rect.left() + text_x, cy + 15), fm2.elidedText(sub, Qt.TextElideMode.ElideRight, avail))
         p.restore()
+
+

@@ -3,8 +3,24 @@ import zlib
 
 from PySide6.QtGui import QColor
 
-FONT_FAMILIES = ["Segoe UI Variable Display", "Segoe UI", "SF Pro Display", "Inter", "Helvetica Neue", "Arial"]
-FONT_CSS = '"Segoe UI Variable Display", "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif'
+FONT_FAMILIES = ["Oswald", "Segoe UI Variable Display", "Segoe UI", "Nirmala UI", "Inter", "Helvetica Neue", "Arial"]
+FONT_CSS = '"Oswald", "Segoe UI Variable Display", "Segoe UI", "Nirmala UI", "Inter", "Helvetica Neue", Arial, sans-serif'
+_fonts_loaded = []
+
+
+def load_fonts():
+    """Registers the bundled Oswald fonts (assets/fonts) once. Other scripts (Bangla...) fall back to the system fonts."""
+    if _fonts_loaded:
+        return
+    _fonts_loaded.append(True)
+    import sys
+    from pathlib import Path
+    from PySide6.QtGui import QFontDatabase
+    folder = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "assets" / "fonts"
+    for name in ("Regular", "Bold", "Light", "Medium", "SemiBold"):
+        f = folder / f"Oswald-{name}.ttf"
+        if f.exists():
+            QFontDatabase.addApplicationFont(str(f))
 
 
 def clamp(v, lo=0.0, hi=1.0):

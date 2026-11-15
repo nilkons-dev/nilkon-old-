@@ -22,7 +22,8 @@ HISTORY_MAX = 60
 DEFAULT_SETTINGS = {
     "mode": "dark",            # dark | light
     "accent": "Crimson",       # key of theme.ACCENTS (red + black by default)
-    "ui_rev": 2,               # bumped when a new default look is introduced
+    "ui_rev": 3,               # bumped when a new default look / a one-time reset is introduced
+    "app_version": "",         # version that last ran: a new version starts with empty caches
     "adaptive": False,         # tint the UI from album art
     "background": "aurora",    # aurora | midnight | deepspace | bluehaze | custom
     "custom_bg": "",
@@ -273,6 +274,32 @@ class Library:
         for items in self.playlists.values():
             used.update(items)
         return {k: v for k, v in self.online_meta.items() if k in used}
+
+    def fresh_start_if_new(self, version):
+        """The first start of a new version begins with empty caches (pictures, suggestions, stream files...), so nothing
+        stale of an older version shows up. Playlists, favourites, downloads and settings are kept. Revision 3 also
+        clears the old play history and taste profile once."""
+        st = self.settings
+        if st.get("app_version") == version:
+            return False
+        for name in ("img_cache", "covers", "stream_cache", "dl_tmp"):
+            shutil.rmtree(self.dir / name, ignore_errors=True)
+        for name in ("shelves_cache.json", "playback.log", "library.unreadable.json", "library.before-cleanup.json"):
+            try:
+                (self.dir / name).unlink()
+            except OSError:
+                pass
+        if int(st.get("ui_rev", 0) or 0) < 3:
+            self.history = []
+            self.play_counts = {}
+            try:
+                (self.dir / "taste.json").unlink()
+            except OSError:
+                pass
+        st["ui_rev"] = max(3, int(st.get("ui_rev", 0) or 0))
+        st["app_version"] = version
+        self.save()
+        return True
 
     def save(self):
         try:

@@ -9,6 +9,7 @@ from PySide6.QtGui import QColor, QFont, QGuiApplication, QLinearGradient, QPain
 from PySide6.QtWidgets import QWidget
 
 from logo_widget import AnimatedLogo
+from theme import load_fonts, FONT_FAMILIES
 
 W, H = 460, 440
 LOGO_H = 218
@@ -19,7 +20,8 @@ ACCENT2 = QColor(255, 92, 77)
 class Splash(QWidget):
     def __init__(self):
         super().__init__(None, Qt.WindowType.SplashScreen | Qt.WindowType.FramelessWindowHint
-                         | Qt.WindowType.WindowStaysOnTopHint)
+                         | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.WindowTransparentForInput)
+        load_fonts()
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setFixedSize(W, H)
         base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "assets"
@@ -105,7 +107,8 @@ class Splash(QWidget):
         p.drawRoundedRect(QRectF(hx, by, 60, bh), bh / 2, bh / 2)
         p.setClipping(False)
         f = QFont()
-        f.setPixelSize(12)
+        f.setFamilies(FONT_FAMILIES)
+        f.setPixelSize(13)
         p.setFont(f)
         p.setPen(QColor(255, 255, 255, 120))
         p.drawText(QRectF(0, by + 12, W, 20), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self._text)

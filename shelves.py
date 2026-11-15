@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QScrollArea, QFrame
 from icons import draw_icon
 from theme import T, alpha, ink
 from tracklist import draw_thumb
+from poster_band import PosterBand
 from visuals import draw_mini_bars
 from widgets import ui_font, round_path, NOPEN, NOBRUSH, AA
 
@@ -384,7 +385,7 @@ class ShelvesView(QScrollArea):
     playRequested = Signal(str)
     menuRequested = Signal(str, object)
 
-    def __init__(self, host, parent=None):
+    def __init__(self, host, parent=None, with_posters=False):
         super().__init__(parent)
         self.host = host
         self.setWidgetResizable(True)
@@ -398,6 +399,10 @@ class ShelvesView(QScrollArea):
         lay = QVBoxLayout(body)
         lay.setContentsMargins(0, 0, 6, 16)
         lay.setSpacing(0)
+        if with_posters:
+            self.posters = PosterBand()
+            lay.addWidget(self.posters)
+            lay.addSpacing(16)
         self.column = ShelfColumn(host)
         self.column.playRequested.connect(self.playRequested)
         self.column.menuRequested.connect(self.menuRequested)

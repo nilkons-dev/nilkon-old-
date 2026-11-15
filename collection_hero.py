@@ -2,9 +2,9 @@
 Playlists can carry a picture of the user's own; without one the first song covers form a 2 x 2 mosaic."""
 from PySide6.QtCore import Qt, QRectF, QPointF, Signal
 from PySide6.QtGui import QPainter, QFont, QFontMetrics, QPen, QColor, QLinearGradient, QBrush, QPainterPath
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QWidget, QLineEdit
 
-from icons import draw_icon
+from icons import draw_icon, qicon
 from theme import T, alpha, ink, hsv, hue_for
 from widgets import ui_font, round_path, NOPEN, NOBRUSH, AA
 
@@ -20,6 +20,8 @@ class CollectionHero(QWidget):
     shareClicked = Signal()
     menuClicked = Signal()
     sortClicked = Signal(object)
+    renameClicked = Signal()
+    searchChanged = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -37,6 +39,80 @@ class CollectionHero(QWidget):
         self._hover = ""
         self.f_eye = ui_font(11, QFont.Weight.Bold)
         self.f_meta = ui_font(13, QFont.Weight.Normal)
+        self._search_open = False
+        self.field = QLineEdit(self)
+        self.field.setPlaceholderText("Search in this list")
+        self.field.setClearButtonEnabled(True)
+        self.field.hide()
+        self.field.textChanged.connect(self.searchChanged)
+        self.field.editingFinished.connect(self._field_done)
+        self._field_action = None
+        self._style_field()
+
+    # -- inline search (like Spotify: a magnifier next to the sort button opens a small field) ---------------
+    def _style_field(self):
+        self.field.setStyleSheet(
+            "QLineEdit { background: %s; border: 1px solid %s; border-radius: 18px; padding: 0 12px 0 4px; "
+            "color: %s; font-size: 13px; selection-background-color: %s; }"
+            "QLineEdit:focus { border: 1px solid %s; }" % (
+                ink(0.08).name(QColor.NameFormat.HexArgb), ink(0.16).name(QColor.NameFormat.HexArgb),
+                ink(0.95).name(QColor.NameFormat.HexArgb), alpha(T.c1, 0.5).name(QColor.NameFormat.HexArgb),
+                alpha(T.c1, 0.8).name(QColor.NameFormat.HexArgb)))
+        if self._field_action is not None:
+            self.field.removeAction(self._field_action)
+        self._field_action = self.field.addAction(qicon("search", ink(0.6), 16), QLineEdit.ActionPosition.LeadingPosition)
+
+    def _field_done(self):
+        if not self.field.text().strip():
+            self.close_search()
+
+    def open_search(self):
+        self._search_open = True
+        self._place_field()
+        self.field.show()
+        self.field.setFocus()
+        self.update()
+
+    def close_search(self):
+        if not self._search_open:
+            return
+        self._search_open = False
+        if self.field.text():
+            self.field.blockSignals(True)
+            self.field.clear()
+            self.field.blockSignals(False)
+            self.searchChanged.emit("")
+        self.field.hide()
+        self.update()
+
+    def set_search_text(self, text):
+        """Shows `text` in the field without announcing it (used when the page changes)."""
+        self.field.blockSignals(True)
+        self.field.setText(text)
+        self.field.blockSignals(False)
+        if text:
+            self._search_open = True
+            self._place_field()
+            self.field.show()
+        elif self._search_open:
+            self._search_open = False
+            self.field.hide()
+        self.update()
+
+    def _place_field(self):
+        b = self._buttons()
+        right = b["sort"].left() - 8 if "sort" in b else float(self.width()) - PAD
+        y = (b["sort"].top() if "sort" in b else self.cover_rect().bottom() - 46)
+        wd = max(120.0, min(260.0, right - (self.cover_rect().right() + 28 + 56 + 14 + 40 * 3 + 40)))
+        self.field.setGeometry(int(right - wd), int(y), int(wd), 36)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if self._search_open:
+            self._place_field()
+
+    def refresh_theme(self):
+        self._style_field()
 
     # -- data ---------------------------------------------------------------------------------------------
     def set_content(self, kind, title, meta, custom=None, mosaic=(), can_edit=False, can_play=True, tint=None, sort_label=""):
@@ -44,6 +120,8 @@ class CollectionHero(QWidget):
         self.custom, self.mosaic = custom, [m for m in mosaic if m is not None and not m.isNull()][:4]
         self.can_edit, self.can_play, self.tint = can_edit, can_play, tint
         self.sort_label = sort_label
+        if self._search_open:
+            self._place_field()
         self.update()
 
     # -- geometry -----------------------------------------------------------------------------------------
@@ -61,12 +139,18 @@ class CollectionHero(QWidget):
         if self.can_edit:
             out["cover"] = QRectF(x, y + 8, 40, 40)
             x += 40 + 6
+            out["rename"] = QRectF(x, y + 8, 40, 40)
+            x += 40 + 6
             out["share"] = QRectF(x, y + 8, 40, 40)
             x += 40 + 6
+        right = float(self.width()) - PAD
         if self.sort_label:
             fm = QFontMetrics(self.f_meta)
             wd = fm.horizontalAdvance(self.sort_label) + 44
-            out["sort"] = QRectF(float(self.width()) - PAD - wd, y + 10, wd, 36)
+            out["sort"] = QRectF(right - wd, y + 10, wd, 36)
+            right -= wd + 6
+        if not self._search_open:
+            out["search"] = QRectF(right - 36, y + 10, 36, 36)
         return out
 
     def _zone(self, pos):
@@ -102,6 +186,10 @@ class CollectionHero(QWidget):
             self.coverClicked.emit()
         elif z == "share":
             self.shareClicked.emit()
+        elif z == "rename":
+            self.renameClicked.emit()
+        elif z == "search":
+            self.open_search()
         elif z == "sort":
             r = self._buttons()["sort"]
             self.sortClicked.emit(self.mapToGlobal(QPointF(r.right(), r.bottom()).toPoint()))
@@ -110,15 +198,15 @@ class CollectionHero(QWidget):
     def _placeholder(self, p, r):
         if self.kind == "liked":
             g = QLinearGradient(r.topLeft(), r.bottomRight())
-            g.setColorAt(0.0, QColor(92, 80, 255))
-            g.setColorAt(1.0, QColor(150, 190, 240))
+            g.setColorAt(0.0, T.c1.lighter(120))
+            g.setColorAt(1.0, T.c1.darker(170))
             p.fillRect(r, QBrush(g))
             icon = "heart-fill"
         else:
             h = hue_for(self.title or "x")
             g = QLinearGradient(r.topLeft(), r.bottomRight())
-            g.setColorAt(0.0, hsv(0.58 + 0.08 * ((h * 7) % 1.0), 0.65, 0.72))
-            g.setColorAt(1.0, hsv(0.66 + 0.06 * ((h * 5) % 1.0), 0.78, 0.34))
+            g.setColorAt(0.0, hsv(h, 0.62, 0.70 if T.dark else 0.90))
+            g.setColorAt(1.0, hsv(h + 0.07, 0.75, 0.30 if T.dark else 0.68))
             p.fillRect(r, QBrush(g))
             icon = {"recent": "history", "all": "library"}.get(self.kind, "list-music")
         isz = r.width() * 0.34
@@ -230,7 +318,7 @@ class CollectionHero(QWidget):
                     p.setPen(NOPEN)
                     p.setBrush(ink(0.10))
                     p.drawEllipse(r)
-                icon = {"shuffle": "shuffle", "cover": "image", "share": "link"}[key]
+                icon = {"shuffle": "shuffle", "cover": "image", "share": "link", "rename": "pen", "search": "search"}[key]
                 draw_icon(p, icon, QRectF(r.center().x() - 12, r.center().y() - 12, 24, 24),
                           ink(0.28 if dis else (1.0 if hov else 0.72)))
         p.end()

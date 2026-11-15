@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QLineEdit, QMessageBox, QAbstractItemView, QMenu, QStackedWidget, QSizePolicy, QSystemTrayIcon)
 
 import tags
-from appinfo import APP_NAME
+from appinfo import APP_NAME, APP_VERSION
 from analyzer_qt import TrackAnalyzer
 from covers import CoverCache, pixmap_from_bytes, square_pixmap
 from dialogs import ask_text, confirm, notice
@@ -61,7 +61,7 @@ from panels import LogoMark, WordMark, QueueList, PlaylistDelegate, ASSETS
 from settings_dialog import SettingsDialog
 from titlebar import TitleBar, edges_at, cursor_for
 from collection_hero import CollectionHero
-from theme import T, ink, hue_for, nice_time, build_qss, FONT_FAMILIES
+from theme import T, ink, hue_for, nice_time, build_qss, FONT_FAMILIES, load_fonts
 from tracklist import TrackList, ColumnHeader
 from visuals import Turntable, MiniDisc, Spectrum, WaveField
 from widgets import (AuroraBackground, GlassPanel, GButton, GlassSlider, SeekBar, Toast, ElidedLabel, eyebrow,
@@ -69,7 +69,7 @@ from widgets import (AuroraBackground, GlassPanel, GButton, GlassSlider, SeekBar
 
 AUDIO_EXTS = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".wma", ".opus"}
 IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.webp *.bmp)"
-COLLECTION_TITLES = {ALL: "All tracks", LIKED: "Liked songs", RECENT: "Recently played"}
+COLLECTION_TITLES = {ALL: "Library", LIKED: "Favorites", RECENT: "History"}
 LISTEN_SECONDS = 15.0
 
 
@@ -114,6 +114,10 @@ class MusicPlayer(QMainWindow):
         self.setAcceptDrops(True)
 
         self.lib = Library().load()
+        try:
+            self.lib.fresh_start_if_new(APP_VERSION)
+        except Exception:
+            pass
         self.current_path = ""
         self.page = "home"                  # home | collection
         self.current_collection = ALL
@@ -269,7 +273,7 @@ class MusicPlayer(QMainWindow):
                         ("Ctrl+Down", lambda: self.nudge_volume(-self.lib.settings["volume_step"])),
                         ("Alt+Right", lambda: self.seek_by(self.lib.settings["seek_step"])),
                         ("Alt+Left", lambda: self.seek_by(-self.lib.settings["seek_step"])),
-                        ("Ctrl+E", self.open_equalizer), ("Ctrl+O", self.add_files),
+                        ("Ctrl+E", self.open_equalizer), ("Ctrl+O", self.add_files), ("Ctrl+F", self._focus_search),
                         ("Ctrl+,", self.open_settings), ("Space", self._space)):
             QShortcut(QKeySequence(seq), self, activated=fn)
 
@@ -494,13 +498,14 @@ class MusicPlayer(QMainWindow):
         lay.addWidget(eyebrow("DISCOVER"))
         lay.addSpacing(2)
         self.nav_buttons = {}
-        for key, label, icon, fn in (
-                ("home", "Home", "home", self.show_home),
-                ("online", "Online", "globe", self.show_online),
-                (ALL, "All tracks", "library", lambda: self.show_collection(ALL)),
-                (LIKED, "Liked songs", "heart", lambda: self.show_collection(LIKED)),
-                (RECENT, "Recently played", "history", lambda: self.show_collection(RECENT))):
+        for key, label, icon, anim, fn in (
+                ("home", "Overview", "n-home", "hop", self.show_home),
+                ("online", "Explore", "n-cloud", "drift", self.show_online),
+                (ALL, "Library", "n-note", "wiggle", lambda: self.show_collection(ALL)),
+                (LIKED, "Favorites", "n-flame", "flicker", lambda: self.show_collection(LIKED)),
+                (RECENT, "History", "n-clock", "spin", lambda: self.show_collection(RECENT))):
             b = GButton(label, icon, "nav", 19)
+            b.set_icon_anim(anim)
             b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             b.clicked.connect(fn)
             lay.addWidget(b)
@@ -536,7 +541,13 @@ class MusicPlayer(QMainWindow):
         self.stats.setObjectName("muted")
         self.stats.setWordWrap(True)
         lay.addWidget(self.stats)
+        about = GButton("About", "info", "nav", 19)
+        about.set_icon_anim("beat")
+        about.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        about.clicked.connect(lambda: self.open_settings(about=True))
+        lay.addWidget(about)
         settings = GButton("Settings", "settings", "nav", 19)
+        settings.set_icon_anim("gear")
         settings.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         settings.clicked.connect(lambda: self.open_settings())
         lay.addWidget(settings)
@@ -558,6 +569,10 @@ class MusicPlayer(QMainWindow):
         self.search.textChanged.connect(self._search_changed)
         self.search.returnPressed.connect(self._search_submit)
         top.addWidget(self.search, 1)
+        self.top_fill = QWidget()                      # keeps the buttons on the right when the search bar is hidden
+        self.top_fill.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.top_fill.hide()
+        top.addWidget(self.top_fill, 1)
         add_file = GButton("Add files", "plus", "primary", 17)
         add_file.clicked.connect(self.add_files)
         top.addWidget(add_file)
@@ -601,6 +616,8 @@ class MusicPlayer(QMainWindow):
         self.hero.coverClicked.connect(lambda: self.choose_playlist_cover(self.current_collection))
         self.hero.shareClicked.connect(lambda: self.share_playlist_code(self.current_collection))
         self.hero.sortClicked.connect(self.sort_menu)
+        self.hero.searchChanged.connect(self.search.setText)
+        self.hero.renameClicked.connect(lambda: self.rename_playlist_dialog(self.current_collection))
         lay.addWidget(self.hero)
         self.col_wave = WaveField(self.engine)               # kept (not shown) for the code that updates it
         self.col_wave.hide()
@@ -802,12 +819,19 @@ class MusicPlayer(QMainWindow):
         self.playlist_list.viewport().update()
         self.search.setPlaceholderText("Search songs, or paste a song link…" if self.page == "online"
                                        else "Search songs, artists, albums…")
+        on_search_page = self.page in ("home", "online")          # one big search bar: only on Overview and Explore
+        self.search.setVisible(on_search_page)
+        self.top_fill.setVisible(not on_search_page)
+        if self.page != "collection" and hasattr(self, "hero"):
+            self.hero.set_search_text("")
 
     def _clear_search(self):
         if self.search.text():
             self.search.blockSignals(True)
             self.search.clear()
             self.search.blockSignals(False)
+        if hasattr(self, "hero"):
+            self.hero.set_search_text("")
 
     def show_home(self):
         self.page = "home"
@@ -960,7 +984,15 @@ class MusicPlayer(QMainWindow):
             self.current_collection = ALL
             self.pages.setCurrentIndex(1)
             self._update_nav()
+            self.hero.set_search_text(self.search.text())
         self.refresh_collection(keep_scroll=False)
+
+    def _focus_search(self):
+        if self.page == "collection":
+            self.hero.open_search()
+        else:
+            self.search.setFocus()
+            self.search.selectAll()
 
     def _search_submit(self):
         if self.page == "online":
@@ -1006,7 +1038,7 @@ class MusicPlayer(QMainWindow):
             self.playlist_list.addItem(item)
         self.playlist_hint.setVisible(not self.lib.playlists)
         self.playlist_list.setVisible(bool(self.lib.playlists))
-        self.stats.setText(f"{len(self.lib.tracks)} songs · {len(self.lib.liked)} liked")
+        self.stats.setText(f"{len(self.lib.tracks)} songs · {len(self.lib.liked)} favorites")
 
     def _greeting(self):
         hour = datetime.now().hour
@@ -1500,11 +1532,11 @@ class MusicPlayer(QMainWindow):
     def _start_analysis(self, path):
         self._analysis_target = path
         if not self.analyzer.available:
-            self.analysis_pill.setText("Simulated waves")
-            self.analysis_pill.setToolTip("Install numpy and miniaudio so the waves follow the real sound.")
+            self.analysis_pill.setText("Estimated spectrum")
+            self.analysis_pill.setToolTip("Real-time analysis needs the numpy and miniaudio components.")
             self.analysis_pill.show()
             return
-        self.analysis_pill.setText("Analysing audio…")
+        self.analysis_pill.setText("Analysing audio")
         self.analysis_pill.setToolTip("")
         self.analysis_pill.show()
         self.analyzer.start(path)
@@ -1517,20 +1549,20 @@ class MusicPlayer(QMainWindow):
         if path == self._analysis_target:
             self.engine.analysis = analysis
             self.seek.set_envelope(analysis.envelope)
-            self.analysis_pill.setText("Live spectrum")
-            self.analysis_pill.setToolTip("The waves follow the real sound of this song.")
+            self.analysis_pill.setText("Real-time spectrum")
+            self.analysis_pill.setToolTip("The spectrum follows the actual audio of this track.")
 
     def _fallback_cache(self, key):
         """Second way to get real waves for a stream: fetch the audio once, then analyse the file."""
         item = self.online_items.get(key)
         if item and not self._cache_tried and getattr(self, "_stream_url", ""):
             self._cache_tried = True
-            self.analysis_pill.setText("Preparing waves…")
-            self.analysis_pill.setToolTip("Fetching the audio once so the waves can follow the real sound.")
+            self.analysis_pill.setText("Preparing spectrum")
+            self.analysis_pill.setToolTip("Loading the audio once so the spectrum can follow it.")
             self.jobs.cache_audio(item, self._stream_cache_dir(), self._stream_url)
         else:
             self.analysis_pill.setText("Streaming")
-            self.analysis_pill.setToolTip("The waves are simulated for this stream.")
+            self.analysis_pill.setToolTip("The spectrum is estimated for this stream.")
 
     def _on_analysis_failed(self, path):
         if path == self._analysis_target and path == self.current_path and path in self.online_items \
@@ -1538,8 +1570,8 @@ class MusicPlayer(QMainWindow):
             self._fallback_cache(path)
             return
         if path == self._analysis_target:
-            self.analysis_pill.setText("Simulated waves")
-            self.analysis_pill.setToolTip("This file could not be analysed, so the waves are simulated.")
+            self.analysis_pill.setText("Estimated spectrum")
+            self.analysis_pill.setToolTip("This file could not be analysed, so the spectrum is estimated.")
 
     # -- transport -------------------------------------------------------------------------------------
     def _vlc_state(self):
@@ -1757,7 +1789,7 @@ class MusicPlayer(QMainWindow):
             pass
         self.engine.set_playing(False)
         self.play_btn.set_icon("play")
-        self.analysis_pill.setText("Waiting for internet…")
+        self.analysis_pill.setText("Reconnecting")
         self.analysis_pill.show()
         self.toast_msg("No internet - NILKON will continue as soon as it is back.", 3600)
         self._start_net_timer()
@@ -2000,12 +2032,12 @@ class MusicPlayer(QMainWindow):
             pass
         self.save_soon()
         self._sync_like_button()
-        self.stats.setText(f"{len(self.lib.tracks)} songs · {len(self.lib.liked)} liked")
+        self.stats.setText(f"{len(self.lib.tracks)} songs · {len(self.lib.liked)} favorites")
         if self.page == "collection" and self.current_collection == LIKED:
             self.refresh_collection()
         else:
             self.repaint_lists()
-        self.toast_msg("Added to Liked songs" if now else "Removed from Liked songs", 1600)
+        self.toast_msg("Added to Favorites" if now else "Removed from Favorites", 1600)
 
     def toggle_like_current(self):
         if self.current_path:
@@ -2248,10 +2280,10 @@ class MusicPlayer(QMainWindow):
         self.mini_disc.set_cover(self.cover_pix)
         self._apply_theme_colour()
         self._update_now_labels()
-        self.analysis_pill.setText("Connecting…")
+        self.analysis_pill.setText("Connecting")
         self.analysis_pill.setToolTip("")
         self.analysis_pill.show()
-        self.fmt_pill.setText("ONLINE · stream")
+        self.fmt_pill.setText("Online stream")
         self.fmt_pill.show()
         self.seek.setRange(0, meta["dur"])
         self.seek.setValue(0)
@@ -2311,7 +2343,7 @@ class MusicPlayer(QMainWindow):
             # live analysis straight from the stream: the waves start within a second of the song
             self._analysis_target = key
             self.engine.analysis = None
-            self.analysis_pill.setText("Starting waves…")
+            self.analysis_pill.setText("Preparing spectrum")
             self.analysis_pill.setToolTip("")
             if not self.analyzer.start_stream(key, play_url):
                 self._fallback_cache(key)
@@ -2331,7 +2363,7 @@ class MusicPlayer(QMainWindow):
         self.loading_key = ""
         self.engine.set_playing(False)
         self.play_btn.set_icon("play")
-        self.analysis_pill.setText("Couldn't load")
+        self.analysis_pill.setText("Unavailable")
         self.toast_msg(msg, 4200)
         self.repaint_lists()
         self.sync_presence()
@@ -2376,7 +2408,7 @@ class MusicPlayer(QMainWindow):
     def _on_cache_failed(self, key):
         if key == self.current_path:
             self.analysis_pill.setText("Streaming")
-            self.analysis_pill.setToolTip("The waves are simulated for this stream.")
+            self.analysis_pill.setToolTip("The spectrum is estimated for this stream.")
 
     # -- online: downloads ----------------------------------------------------------------------
     def download_state(self, key):
@@ -2917,21 +2949,7 @@ class MusicPlayer(QMainWindow):
             else:
                 self.toast_msg("This playlist is empty", 1800)
         elif chosen == rename:
-            new, ok = ask_text(self, "Rename playlist", "Choose a new name for this playlist.", text=name,
-                               ok_text="Save", icon="list-music")
-            if ok and new.strip() != name:
-                good, msg = self.lib.rename_playlist(name, new)
-                if not good:
-                    notice(self, "Can't rename playlist", msg)
-                    return
-                if self.current_collection == name:
-                    self.current_collection = new.strip()
-                if self.queue_name == name:
-                    self.queue_name = new.strip()
-                self.save_soon()
-                self.refresh_all()
-                if self.page == "collection":
-                    self.collection_title.setText(self._collection_title(self.current_collection))
+            self.rename_playlist_dialog(name)
         elif chosen == delete:
             if confirm(self, "Delete playlist", f"Delete “{name}”? Your songs stay in the library.",
                        "Delete", "trash"):
@@ -2942,6 +2960,26 @@ class MusicPlayer(QMainWindow):
                     self.queue_name = None
                 self.save_soon()
                 self.refresh_all()
+
+    def rename_playlist_dialog(self, name):
+        if name not in self.lib.playlists:
+            return
+        new, ok = ask_text(self, "Rename playlist", "Choose a new name for this playlist.", text=name,
+                           ok_text="Save", icon="list-music")
+        if not ok or new.strip() == name:
+            return
+        good, msg = self.lib.rename_playlist(name, new)
+        if not good:
+            notice(self, "Can't rename playlist", msg)
+            return
+        if self.current_collection == name:
+            self.current_collection = new.strip()
+        if self.queue_name == name:
+            self.queue_name = new.strip()
+        self.save_soon()
+        self.refresh_all()
+        if self.page == "collection":
+            self.collection_title.setText(self._collection_title(self.current_collection))
 
     def _order_changed(self, paths):
         name = self.current_collection
@@ -3010,8 +3048,8 @@ class MusicPlayer(QMainWindow):
         self.save_soon()
 
     # -- settings ------------------------------------------------------------------------------------------------
-    def open_settings(self, page=0):
-        SettingsDialog(self, self, page).exec()
+    def open_settings(self, page=0, about=False):
+        SettingsDialog(self, self, page, about_only=about).exec()
         self.save_soon()
 
     def apply_all_settings(self):
@@ -3028,6 +3066,8 @@ class MusicPlayer(QMainWindow):
             self.repaint_all()
         elif key in ("accent", "adaptive"):
             self._apply_theme_colour()
+            if hasattr(self, "hero"):
+                self.hero.refresh_theme()
             if key == "accent":
                 QApplication.instance().setStyleSheet(build_qss())
         elif key in ("background", "custom_bg", "bg_dim", "bg_blur"):
@@ -3072,6 +3112,8 @@ class MusicPlayer(QMainWindow):
             self.repaint_all()
 
     def repaint_all(self):
+        if hasattr(self, "hero"):
+            self.hero.refresh_theme()
         for w in self.findChildren(QWidget):
             w.update()
 
@@ -3166,7 +3208,7 @@ class MusicPlayer(QMainWindow):
         self.lib.history = []
         self.save_soon()
         self.refresh_all()
-        self.toast_msg("Recently played cleared", 1800)
+        self.toast_msg("History cleared", 1800)
 
     def reset_listen_counts(self):
         self.taste.reset()
@@ -3305,6 +3347,7 @@ def main(app=None, splash=None):
     gc_timer.start(4000)
     app.setApplicationName(APP_NAME)
     app.setWindowIcon(app_icon())
+    load_fonts()
     base_font = QFont()
     base_font.setFamilies(FONT_FAMILIES)
     base_font.setPointSize(10)

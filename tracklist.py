@@ -44,13 +44,11 @@ def draw_thumb(p, rect, path, cover, icon_alpha=0.85):
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         p.drawPixmap(rect, cover, QRectF(cover.rect()))
     else:
-        h = hue_for(path)
-        g = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        g.setColorAt(0.0, hsv(0.58 + 0.08 * ((h * 7) % 1.0), 0.65, 0.78))
-        g.setColorAt(1.0, hsv(0.64 + 0.06 * ((h * 5) % 1.0), 0.78, 0.38))
-        p.fillRect(rect, QBrush(g))
-        isz = rect.width() * 0.46
-        draw_icon(p, "music", QRectF(rect.center().x() - isz / 2, rect.center().y() - isz / 2, isz, isz), white(icon_alpha))
+        # no picture (yet): a calm dark tile with a faint note, like a loading placeholder on streaming apps
+        p.fillRect(rect, QColor(21, 22, 28) if T.dark else QColor(228, 230, 238))
+        isz = rect.width() * 0.40
+        draw_icon(p, "music", QRectF(rect.center().x() - isz / 2, rect.center().y() - isz / 2, isz, isz),
+                  QColor(255, 255, 255, 62) if T.dark else QColor(20, 24, 40, 70))
     p.restore()
     p.setBrush(NOBRUSH)
     p.setPen(QPen(QColor(255, 255, 255, 46) if T.dark else QColor(12, 20, 44, 50), 1))

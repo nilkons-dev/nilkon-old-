@@ -161,6 +161,45 @@ class GlassPanel(QFrame):
 
 
 # ------------------------------------------------------------------------------------
+# Icon animations of the side bar (each plays once when the item is clicked). Keyframes: (t, (dx, dy, rotate, sx, sy)),
+# ease-in-out between them; origin = pivot inside the icon (0..1); (duration ms, repetitions).
+_I = (0.0, 0.0, 0.0, 1.0, 1.0)
+ICON_ANIMS = {
+    "hop": {"dur": 800, "n": 1, "origin": (0.5, 0.5),
+            "kf": [(0.0, _I), (0.4, (0, -4, 0, 1, 1)), (0.6, _I), (0.75, (0, -2, 0, 1, 1)), (1.0, _I)]},
+    "drift": {"dur": 900, "n": 2, "origin": (0.5, 0.5),
+              "kf": [(0.0, (-2, 0, 0, 1, 1)), (0.5, (2, 0, 0, 1, 1)), (1.0, (-2, 0, 0, 1, 1))]},
+    "wiggle": {"dur": 700, "n": 2, "origin": (0.5, 0.8),
+               "kf": [(0.0, _I), (0.25, (0, 0, -12, 1, 1)), (0.75, (0, 0, 12, 1, 1)), (1.0, _I)]},
+    "flicker": {"dur": 450, "n": 3, "origin": (0.5, 0.9),
+                "kf": [(0.0, _I), (0.3, (0, 0, 0, 1.12, 0.94)), (0.6, (0, 0, 0, 0.94, 1.1)), (1.0, _I)]},
+    "spin": {"dur": 900, "n": 1, "origin": (0.5, 0.5), "kf": [(0.0, _I), (1.0, (0, 0, 360, 1, 1))]},
+    "gear": {"dur": 800, "n": 1, "origin": (0.5, 0.5), "kf": [(0.0, _I), (1.0, (0, 0, 120, 1, 1))]},
+    "pop": {"dur": 380, "n": 1, "origin": (0.5, 0.5),
+            "kf": [(0.0, _I), (0.35, (0, 0, 0, 1.16, 1.16)), (1.0, _I)]},
+    "beat": {"dur": 520, "n": 1, "origin": (0.5, 0.55),
+             "kf": [(0.0, _I), (0.25, (0, 0, 0, 1.2, 1.2)), (0.5, (0, 0, 0, 0.96, 0.96)), (0.7, (0, 0, 0, 1.1, 1.1)), (1.0, _I)]},
+}
+
+
+def _smooth(t):
+    return t * t * (3.0 - 2.0 * t)
+
+
+def icon_anim_value(spec, v):
+    """v = 0..n (progress over all repetitions) -> (dx, dy, rotate, sx, sy)."""
+    n = spec["n"]
+    if v >= n:
+        return _I
+    f = v - int(v)
+    kf = spec["kf"]
+    for (t0, a0), (t1, a1) in zip(kf, kf[1:]):
+        if f <= t1:
+            k = _smooth((f - t0) / (t1 - t0)) if t1 > t0 else 1.0
+            return tuple(x0 + (x1 - x0) * k for x0, x1 in zip(a0, a1))
+    return kf[-1][1]
+
+
 class GButton(QAbstractButton):
     """Custom-painted button. kinds: primary, glass, ghost, round, flat, nav, chip, play."""
 
@@ -178,6 +217,11 @@ class GButton(QAbstractButton):
         self._anim.setDuration(170)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._anim.valueChanged.connect(self._on_anim)
+        self._ia_kind = None                    # name in ICON_ANIMS played when the button is clicked
+        self._ia_val = 0.0
+        self._ia = None
+        self._ia_spec = None
+        self.pressed.connect(self._on_pressed)
         self.setText(text)
         if kind == "play":
             self.setFixedSize(72, 72)
@@ -188,6 +232,38 @@ class GButton(QAbstractButton):
 
     def _on_anim(self, v):
         self._hover = float(v)
+        self.update()
+
+    def set_icon_anim(self, kind):
+        self._ia_kind = kind
+
+    def _on_pressed(self):
+        self.play_icon_anim()
+
+    def play_icon_anim(self, kind=None):
+        """One run of the icon animation (thin and short). Buttons without a chosen animation give a small pop."""
+        spec = ICON_ANIMS.get(kind or self._ia_kind or ("pop" if self._kind != "primary" else ""))
+        if not spec or not self._icon or self.parent() is None:
+            return
+        if self._ia is None:
+            self._ia = QVariantAnimation(self)
+            self._ia.valueChanged.connect(self._on_ia)
+            self._ia.finished.connect(self._on_ia_done)
+        self._ia.stop()
+        self._ia_spec = spec
+        self._ia.setDuration(spec["dur"] * spec["n"])
+        self._ia.setStartValue(0.0)
+        self._ia.setEndValue(float(spec["n"]))
+        self._ia.setEasingCurve(QEasingCurve.Type.Linear)
+        self._ia.start()
+
+    def _on_ia(self, v):
+        self._ia_val = float(v)
+        self.update()
+
+    def _on_ia_done(self):
+        self._ia_val = 0.0
+        self._ia_spec = None
         self.update()
 
     def _go(self, target):
@@ -224,7 +300,7 @@ class GButton(QAbstractButton):
         tw = fm.horizontalAdvance(self.text()) if self.text() else 0
         iw = (self._isz + (8 if self.text() else 0)) if self._icon else 0
         if k == "nav":
-            return QSize(tw + iw + 40, 44)
+            return QSize(tw + iw + 64, 46)
         if k == "chip":
             return QSize(tw + iw + 26, 32)
         return QSize(tw + iw + 38, 42)
@@ -297,15 +373,43 @@ class GButton(QAbstractButton):
         tw = fm.horizontalAdvance(text) if text else 0
         gap = 9 if (text and has_icon) else 0
         total = (isz if has_icon else 0) + gap + tw
+        tile = 0.0
         if k == "nav":
-            x = r.left() + 18
+            tile = 34.0
+            tx = r.left() + 8
+            tr = QRectF(tx, r.center().y() - tile / 2.0, tile, tile)
+            p.setPen(NOPEN)
+            p.setBrush(alpha(T.c1, 0.22) if active else ink(0.055 + 0.04 * h))
+            p.drawRoundedRect(tr, 10, 10)
+            x = tx + (tile - isz) / 2.0
+            gap = 14 + (tile - isz) / 2.0
         else:
             x = r.center().x() - total / 2.0
         if has_icon:
             icol = QColor(fg)
             if k == "nav" and active:
                 icol = T.c1.lighter(115) if T.dark else T.c1.darker(115)
-            draw_icon(p, self._icon, QRectF(x, r.center().y() - isz / 2.0, isz, isz), icol)
+            ir = QRectF(x, r.center().y() - isz / 2.0, isz, isz)
+            dx = dy = rot = 0.0
+            sx = sy = 1.0
+            ox, oy = 0.5, 0.5
+            spec = self._ia_spec
+            if spec is not None and self._ia_val > 0.0:
+                dx, dy, rot, sx, sy = icon_anim_value(spec, self._ia_val)
+                ox, oy = spec["origin"]
+            elif k != "nav" and h > 0.01:
+                sx = sy = 1.0 + 0.07 * h                 # a light lift while the mouse is on a button
+            if dx or dy or rot or sx != 1.0 or sy != 1.0:
+                p.save()
+                px, py = ir.left() + ir.width() * ox, ir.top() + ir.height() * oy
+                p.translate(px + dx, py + dy)
+                p.rotate(rot)
+                p.scale(sx, sy)
+                p.translate(-px, -py)
+                draw_icon(p, self._icon, ir, icol)
+                p.restore()
+            else:
+                draw_icon(p, self._icon, ir, icol)
             x += isz + gap
         if text:
             p.setFont(self._font)

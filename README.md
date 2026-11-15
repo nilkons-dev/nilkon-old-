@@ -59,6 +59,19 @@ Data is stored in `~/.nilkon_music`. Renaming a song changes its display name on
 - Waves for local and online songs start within a fraction of a second (progressive analysis) and no longer jump when the analysis completes.
 - Buttons, sliders and menus now follow the song colours.
 
+## 1.13.0 - Oswald, poster band, new side bar
+- Font: Oswald everywhere (bundled, SIL OFL licence in assets/fonts).
+- Side bar: Overview, Explore, Library, Favorites, History with new icons that play a short animation when clicked;
+  About is its own entry above Settings; buttons have a light hover/click animation; playlists show a big cover (48 px).
+- One big search bar only on Overview and Explore. Playlist pages have a search icon next to the sort button; a pen
+  button next to "choose picture" renames the playlist.
+- Explore: poster band (wide banner + small card from assets/posters) with random fade-over every few seconds.
+- Picture placeholders are neutral dark tiles with a note instead of blue gradients.
+- Overview spectrum redrawn much lighter (fewer points, one glow, cached gradients); status wording made professional.
+- First start of a new version begins with empty caches (pictures, suggestions, stream files); the old play history and
+  taste profile are cleared once with this version. Playlists, favourites, downloads and settings are kept.
+- Splash window no longer shows "not responding" when clicked; search/stream connections are pre-opened at start.
+
 ## 1.12.0 - splash, Snap Layouts, short share codes, steadier streams
 - New start-up window: animated logo, NILKON name under it and a loading bar that follows the real loading steps.
   VLC (the sound engine) now starts loading the moment the program starts, in parallel with everything else.

@@ -183,22 +183,35 @@ _DUR_RE = re.compile(r"^\d{1,2}(:\d{2}){1,2}$")
 
 
 _tls = threading.local()
+_pool = []
+_pool_lock = threading.Lock()
 
 
-def _conn(fresh=False):
-    """One kept-alive HTTPS connection per thread: a search no longer pays the connection set-up each time."""
+def _new_conn():
     import http.client
-    c = getattr(_tls, "conn", None)
-    if c is None or fresh:
-        if c is not None:
-            try:
-                c.close()
-            except Exception:
-                pass
-        host = urllib.parse.urlparse(MUSIC_API).hostname
-        c = http.client.HTTPSConnection(host, timeout=10)
-        _tls.conn = c
-    return c
+    host = urllib.parse.urlparse(MUSIC_API).hostname
+    return http.client.HTTPSConnection(host, timeout=10)
+
+
+def _checkout(fresh=False):
+    """A kept-alive HTTPS connection from a small shared pool (any thread may use it), so a search does not pay for the
+    connection set-up - the pool is already filled by warmup() when the program starts."""
+    if not fresh:
+        with _pool_lock:
+            if _pool:
+                return _pool.pop()
+    return _new_conn()
+
+
+def _checkin(c):
+    with _pool_lock:
+        if len(_pool) < 4:
+            _pool.append(c)
+            return
+    try:
+        c.close()
+    except Exception:
+        pass
 
 
 def _post_json(endpoint, body, timeout=8):
@@ -210,18 +223,24 @@ def _post_json(endpoint, body, timeout=8):
     headers = {"User-Agent": USER_AGENT, "Content-Type": "application/json", "Accept-Language": "en-US,en;q=0.9",
                "Accept-Encoding": "gzip", "Origin": "https://music.youtube.com", "Referer": "https://music.youtube.com/"}
     last = None
-    for attempt in range(2):                      # a kept-alive connection may have been closed by the server
-        c = _conn(fresh=attempt > 0)
+    for attempt in range(3):                      # a kept-alive connection may have been closed by the server
+        c = _checkout(fresh=attempt > 0)
         try:
             c.timeout = timeout
             c.request("POST", path, payload, headers)
             resp = c.getresponse()
             raw = resp.read()
             if resp.status >= 400:
+                try:
+                    c.close()
+                except Exception:
+                    pass
                 raise urllib.error.HTTPError(MUSIC_API, resp.status, resp.reason, resp.headers, None)
             if resp.headers.get("Content-Encoding", "").lower() == "gzip":
                 raw = gzip.decompress(raw)
-            return json.loads(raw.decode("utf-8", "replace"))
+            data = json.loads(raw.decode("utf-8", "replace"))
+            _checkin(c)
+            return data
         except urllib.error.HTTPError:
             raise
         except Exception as exc:
@@ -230,7 +249,6 @@ def _post_json(endpoint, body, timeout=8):
                 c.close()
             except Exception:
                 pass
-            _tls.conn = None
     raise last
 
 
@@ -834,13 +852,21 @@ def warmup():
         _ytdlp()
     except Exception:
         pass
-    try:
-        _conn().connect()
-    except Exception:
-        pass
+    def _open():
+        try:
+            c = _new_conn()
+            c.connect()
+            _checkin(c)
+        except Exception:
+            pass
+    ts = [threading.Thread(target=_open, daemon=True) for _ in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(8)
     try:
         import socket
-        for h in ("www.youtube.com", "music.youtube.com"):
+        for h in ("www.youtube.com", "music.youtube.com", "i.ytimg.com", "yt3.ggpht.com", "lh3.googleusercontent.com"):
             try:
                 socket.getaddrinfo(h, 443)
             except OSError:
