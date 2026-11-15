@@ -1,6 +1,8 @@
 """Playlist sharing and importing (Qt-free).
 
-* Share code  - "NILKON-PL1:..." : a short text a friend pastes into NILKON (Playlist + > Import > Paste share code).
+* Share code  - "NKP1-AbC123" : a short, fixed-size code (the playlist is parked on a free paste service and the code is
+                its key). If the service cannot be reached the long offline code "NILKON-PL1:..." is used instead.
+                A friend pastes either into NILKON (Playlist + > Import from a share code).
 * .nilkon file - the same data as a file (send it by WhatsApp / Telegram / e-mail).
 * Spotify     - export the playlist to CSV (free site exportify.net), then import the CSV; every song is matched on
                 the online catalogue. Also reads plain text lists ("Artist - Title" per line).
@@ -10,6 +12,8 @@ import csv
 import io
 import json
 import re
+import urllib.parse
+import urllib.request
 import zlib
 
 PREFIX = "NILKON-PL1:"
@@ -188,3 +192,57 @@ def pick_match(entry, results):
         if score > best_score:
             best, best_score = r, score
     return best if best_score >= 0.5 else None
+
+
+# -- short share codes -----------------------------------------------------------------------------------------
+# Free paste services, tried in order. The code is "NKP<service number>-<key>", always about 10 characters.
+_UA = "NILKON-playlist/1.0"
+_SERVICES = {
+    "1": {"post": "https://paste.rs/", "get": "https://paste.rs/{key}"},
+    "2": {"post": "https://dpaste.com/api/v2/", "get": "https://dpaste.com/{key}.txt"},
+}
+SHORT_RE = re.compile(r"\bNKP([12])-([A-Za-z0-9]{3,24})\b")
+
+
+def find_short(text):
+    """('1', 'AbC123') when the text holds a short share code, else None."""
+    m = SHORT_RE.search(text or "")
+    return (m.group(1), m.group(2)) if m else None
+
+
+def upload_short(long_code, timeout=10):
+    """Park the long code on a paste service -> 'NKP1-key'. Returns '' when no service answers (offline, blocked...)."""
+    body = long_code.encode("ascii", "ignore")
+    for num, svc in _SERVICES.items():
+        try:
+            if num == "1":
+                req = urllib.request.Request(svc["post"], data=body, method="POST",
+                                             headers={"User-Agent": _UA, "Content-Type": "text/plain"})
+            else:
+                form = urllib.parse.urlencode({"content": long_code, "syntax": "text", "expiry_days": 365}).encode()
+                req = urllib.request.Request(svc["post"], data=form, method="POST", headers={"User-Agent": _UA})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                url = r.read(2000).decode("utf-8", "ignore").strip().split()[0] if r.status < 300 else ""
+            key = url.rstrip("/").rsplit("/", 1)[-1]
+            if re.fullmatch(r"[A-Za-z0-9]{3,24}", key):
+                return f"NKP{num}-{key}"
+        except Exception:
+            continue
+    return ""
+
+
+def fetch_short(num, key, timeout=12):
+    """Download the long code behind a short one. Raises ImportError_ with a friendly message."""
+    svc = _SERVICES.get(num)
+    if not svc:
+        raise ImportError_("This share code is not supported by this version of NILKON.")
+    try:
+        req = urllib.request.Request(svc["get"].format(key=key), headers={"User-Agent": _UA})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            text = r.read(6_000_000).decode("utf-8", "ignore")
+    except Exception as exc:
+        raise ImportError_("The playlist could not be downloaded. Check your internet connection, "
+                           "or the code may have expired.") from exc
+    if PREFIX not in text:
+        raise ImportError_("The share code was not found - it may have expired.")
+    return text

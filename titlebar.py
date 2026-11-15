@@ -47,6 +47,18 @@ class TitleBar(QWidget):
             right -= BTN_W
         return dict(rects), right
 
+    def maximize_rect(self):
+        """The maximise button in this widget's own coordinates (Windows 11 Snap Layouts need to know where it is)."""
+        return self._button_rects()[0][1]
+
+    def set_snap_hover(self, on, pressed=False):
+        """Windows owns the mouse while it is over the maximise button (Snap Layouts); it tells us about it here."""
+        h = 1 if on else (-1 if self._hover == 1 else self._hover)
+        d = 1 if (on and pressed) else -1
+        if h != self._hover or d != self._down:
+            self._hover, self._down = h, d
+            self.update()
+
     def _button_at(self, pos):
         rects, _ = self._button_rects()
         for i, r in rects.items():

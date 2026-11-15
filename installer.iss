@@ -10,7 +10,7 @@ AppVersion={#AppVersion}
 AppPublisher=NILKON
 DefaultDirName={autopf}\NILKON
 DefaultGroupName=NILKON
-UninstallDisplayIcon={app}\NILKON.exe
+UninstallDisplayIcon={app}\NILKON_icon2.ico
 SetupIconFile=assets\logo.ico
 OutputDir=installer_output
 OutputBaseFilename=NILKON_Setup_{#AppVersion}
@@ -22,16 +22,20 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 DisableProgramGroupPage=yes
+ChangesAssociations=yes
+CloseApplications=yes
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
 
 [Files]
 Source: "dist\NILKON\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; a new icon file name makes Windows forget the old, cached icon of earlier versions
+Source: "assets\logo.ico"; DestDir: "{app}"; DestName: "NILKON_icon2.ico"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\NILKON"; Filename: "{app}\NILKON.exe"
-Name: "{autodesktop}\NILKON"; Filename: "{app}\NILKON.exe"; Tasks: desktopicon
+Name: "{group}\NILKON"; Filename: "{app}\NILKON.exe"; IconFilename: "{app}\NILKON_icon2.ico"; AppUserModelID: "Nilkon.MusicPlayer"
+Name: "{autodesktop}\NILKON"; Filename: "{app}\NILKON.exe"; IconFilename: "{app}\NILKON_icon2.ico"; AppUserModelID: "Nilkon.MusicPlayer"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\NILKON.exe"; Description: "Start NILKON"; Flags: nowait postinstall skipifsilent

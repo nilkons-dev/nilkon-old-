@@ -59,6 +59,20 @@ Data is stored in `~/.nilkon_music`. Renaming a song changes its display name on
 - Waves for local and online songs start within a fraction of a second (progressive analysis) and no longer jump when the analysis completes.
 - Buttons, sliders and menus now follow the song colours.
 
+## 1.12.0 - splash, Snap Layouts, short share codes, steadier streams
+- New start-up window: animated logo, NILKON name under it and a loading bar that follows the real loading steps.
+  VLC (the sound engine) now starts loading the moment the program starts, in parallel with everything else.
+- Windows 11 Snap Layouts: rest the mouse on the maximise button (or press Win+Z) to pick a layout.
+- Playlist share codes are now short and always the same size (`NKP1-xxxxxxx`): the playlist is parked on a free
+  paste service and the code is its key. If the service cannot be reached, the long offline code is used instead.
+  `.nilkon` files work as before.
+- Streams: when a song stops or "Connection lost" shows although the internet works, NILKON now retries with and without its
+  local proxy, no longer repeats the last seconds when a stream ends a little early, and writes
+  `~/.nilkon_music/playback.log` (send it if a song still fails).
+- Icons: shortcuts use a new icon file name, so Windows drops the old cached cat icon. If the taskbar still shows the
+  old icon: unpin NILKON, start it again and pin it again.
+- Next 3 songs are prepared in advance (was 2).
+
 ## 1.11.0 - new look, sort, stronger network
 - New logo: red cat-and-moon app icon, and the new animated logo beside the NILKON name, in Settings and in About.
 - Default colours are now red + black (existing installs switch once; you can still change it in Settings).

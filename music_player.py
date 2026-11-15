@@ -15,55 +15,20 @@ import zlib
 from datetime import datetime
 from pathlib import Path
 
-def _use_bundled_vlc():
-    """The installed app carries its own copy of VLC (folder 'vlc' next to the program), so nothing else is needed."""
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-    folder = base / "vlc"
-    lib = folder / "libvlc.dll"
-    if not lib.exists():
-        return
-    os.environ["PYTHON_VLC_LIB_PATH"] = str(lib)
-    os.environ["PYTHON_VLC_MODULE_PATH"] = str(folder / "plugins")
-    os.environ["VLC_PLUGIN_PATH"] = str(folder / "plugins")
-    try:
-        os.add_dll_directory(str(folder))
-    except Exception:
-        pass
+from vlc_boot import vlc, VLC_ERROR, _VLC_BASE_ARGS, _prewarm
+
+_SPLASH = [None]
 
 
-_use_bundled_vlc()
-
-try:
-    import vlc
-    VLC_ERROR = None
-except Exception as _exc:  # reported nicely once the QApplication exists
-    vlc = None
-    VLC_ERROR = _exc
-
-_VLC_BASE_ARGS = ["--no-video", "--quiet", "--no-osd", "--no-stats", "--no-metadata-network-access"]
-_prewarm = {"instance": None, "thread": None}
-
-
-def _prewarm_vlc():
-    """Scanning VLC's plugins is the slowest part of start-up, so it runs in the background while the window is built."""
-    try:
-        _prewarm["instance"] = vlc.Instance(*_VLC_BASE_ARGS)
-    except Exception:
-        _prewarm["instance"] = None
-
-
-def _prewarm_ytdlp():
-    try:
-        import online as _online
-        _online._ytdlp()
-    except Exception:
-        pass
-
-
-threading.Thread(target=_prewarm_ytdlp, name="ytdlp-prewarm", daemon=True).start()
-if vlc is not None:
-    _prewarm["thread"] = threading.Thread(target=_prewarm_vlc, name="vlc-prewarm", daemon=True)
-    _prewarm["thread"].start()
+def _pump(value, text=None):
+    """Moves the start-up bar and lets the splash animation breathe while the window is being built."""
+    sp = _SPLASH[0]
+    if sp is not None:
+        try:
+            sp.set_progress(value, text)
+            QApplication.processEvents()
+        except Exception:
+            pass
 
 from collections import OrderedDict
 from PySide6.QtCore import Qt, QEvent, QFile, QPropertyAnimation, QEasingCurve, QTimer, QUrl, Signal
@@ -110,7 +75,7 @@ LISTEN_SECONDS = 15.0
 
 def app_icon():
     icon = QIcon()
-    for name in ("logo.ico", "logo_app.png"):
+    for name in ("logo_app.png", "logo.ico"):
         f = ASSETS / name
         if f.is_file():
             icon.addFile(str(f))
@@ -193,6 +158,8 @@ class MusicPlayer(QMainWindow):
         self._net_wait_pos = 0
         self._net_ticks = 0
         self._net_cycles = {}
+        self._direct_keys = set()                    # songs that play straight from the web (without the local proxy)
+        self._early_ends = {}                        # song -> how many times its stream ended before the real end
         self._search_wait = False
         self._buf_t = 0.0
         self._net_timer = QTimer(self)
@@ -278,7 +245,9 @@ class MusicPlayer(QMainWindow):
 
         online.COOKIE_BROWSER[0] = s.get("cookie_browser", "")
         self.presence.configure(s["discord_enabled"], s["discord_app_id"])
+        _pump(0.95, "Building the player…")
         self.build_ui()
+        _pump(0.98, "Almost ready…")
         self._setup_tray()
         QApplication.instance().setStyleSheet(build_qss())
         self.apply_all_settings()
@@ -287,6 +256,7 @@ class MusicPlayer(QMainWindow):
 
         self._suggest = self.lib.suggestions(12)
         self.refresh_all()
+        _pump(0.99, "Opening…")
         self.apply_eq_for("")
 
         self.meta_timer = QTimer(self)
@@ -384,6 +354,52 @@ class MusicPlayer(QMainWindow):
                 obj.unsetCursor()
         return super().eventFilter(obj, ev)
 
+    def nativeEvent(self, event_type, message):
+        """Windows 11 Snap Layouts: the maximise button is reported to Windows as the real maximise button, so the
+        layout picker appears when the mouse rests on it (and Win+Z works)."""
+        if sys.platform == "win32" and bytes(event_type) == b"windows_generic_MSG":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                msg = wintypes.MSG.from_address(int(message))
+                m = msg.message
+                if m in (0x84, 0xA0, 0xA1, 0xA2, 0x2A2) and hasattr(self, "titlebar") \
+                        and not (self.isMinimized() or self.isFullScreen()):
+                    tb = self.titlebar
+                    if m == 0x2A2:                                        # WM_NCMOUSELEAVE
+                        tb.set_snap_hover(False)
+                        return False, 0
+                    over = False
+                    if m == 0x84 or msg.wParam == 9 or m == 0xA0:
+                        lp = int(msg.lParam)
+                        x = ctypes.c_short(lp & 0xFFFF).value
+                        y = ctypes.c_short((lp >> 16) & 0xFFFF).value
+                        rc = wintypes.RECT()
+                        ctypes.windll.user32.GetWindowRect(int(self.winId()), ctypes.byref(rc))
+                        dpr = self.devicePixelRatioF() or 1.0
+                        from PySide6.QtCore import QPointF
+                        local = QPointF((x - rc.left) / dpr, (y - rc.top) / dpr)
+                        r = tb.maximize_rect()
+                        top_left = tb.mapTo(self, r.toRect().topLeft())
+                        over = local.x() >= top_left.x() and local.x() < top_left.x() + r.width() \
+                            and local.y() >= top_left.y() and local.y() < top_left.y() + r.height()
+                    if m == 0x84:                                         # WM_NCHITTEST
+                        tb.set_snap_hover(over, bool(QApplication.mouseButtons() & Qt.MouseButton.LeftButton))
+                        if over:
+                            return True, 9                                # HTMAXBUTTON
+                    elif m == 0xA0:                                       # WM_NCMOUSEMOVE
+                        tb.set_snap_hover(over and msg.wParam == 9)
+                    elif m == 0xA1 and msg.wParam == 9:                   # WM_NCLBUTTONDOWN on the button
+                        tb.set_snap_hover(True, True)
+                        return True, 0
+                    elif m == 0xA2 and msg.wParam == 9:                   # WM_NCLBUTTONUP: click
+                        tb.set_snap_hover(False)
+                        self.toggle_maximize()
+                        return True, 0
+            except Exception:
+                pass
+        return super().nativeEvent(event_type, message)
+
     def showEvent(self, e):
         super().showEvent(e)
         if sys.platform == "win32" and not getattr(self, "_frame_done", False):
@@ -396,6 +412,16 @@ class MusicPlayer(QMainWindow):
             import ctypes
             from ctypes import byref, c_int, windll
             hwnd = int(self.winId())
+            try:                                                 # a real maximise / minimise box: needed for Snap Layouts
+                u32 = windll.user32
+                u32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+                st = u32.GetWindowLongPtrW(hwnd, -16)
+                new = st | 0x00010000 | 0x00020000               # WS_MAXIMIZEBOX | WS_MINIMIZEBOX
+                if new != st:
+                    u32.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
+                    u32.SetWindowLongPtrW(hwnd, -16, new)
+            except Exception:
+                pass
             windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, byref(c_int(2)), 4)          # DWMWCP_ROUND
             c = T.c1
             colorref = (int(c.blue() * 0.35) << 16) | (int(c.green() * 0.35) << 8) | int(c.red() * 0.35)
@@ -1610,7 +1636,10 @@ class MusicPlayer(QMainWindow):
             self._on_playback_error()
         elif state == vlc.State.Ended and _time.monotonic() - self._req_t > 1.5:
             dur_known = self.lib.duration(self.current_path) or 0
-            if is_online(self.current_path) and not self.loading_key and dur_known > 0 and 0 <= tm < dur_known - 6000:
+            seen = self._early_ends.get(self.current_path, 0)
+            if is_online(self.current_path) and not self.loading_key and dur_known > 0 and 0 <= tm < dur_known - 12000 \
+                    and seen < 2:
+                self._early_ends[self.current_path] = seen + 1
                 self._on_playback_error()              # the stream stopped early (connection) - not a real end
                 return
             eng.set_playing(False)
@@ -1627,7 +1656,7 @@ class MusicPlayer(QMainWindow):
                 dur_s = self.lib.duration(self.current_path) or int(length or 0)
                 frozen = now_s - last[2]
                 near_end = dur_s > 0 and tm >= dur_s - 8000
-                if (near_end and frozen > 3.5) or frozen > 14.0:
+                if (near_end and frozen > 3.5) or (frozen > 12.0 and state == vlc.State.Playing):
                     self._pos_seen = None
                     if near_end:
                         eng.set_playing(False)
@@ -1658,10 +1687,26 @@ class MusicPlayer(QMainWindow):
             self.update_hero()
             self.repaint_lists()
 
+    def _plog(self, text):
+        """Tiny diagnostic log (~/.nilkon_music/playback.log) so a stubborn stream problem can be traced."""
+        try:
+            f = self.lib.dir / "playback.log"
+            if f.exists() and f.stat().st_size > 200_000:
+                f.write_text("", encoding="utf-8")
+            with open(f, "a", encoding="utf-8") as fh:
+                fh.write(datetime.now().strftime("%H:%M:%S ") + text + "\n")
+        except Exception:
+            pass
+
     def _on_playback_error(self):
         """A stream died (expired link, lost connection): reconnect and carry on from the same second; if the
         internet is gone wait for it; only skip a song that really cannot be played."""
         cur = self.current_path
+        try:
+            self._plog(f"error {cur} state={self.player.get_state()} t={self.player.get_time()} "
+                       f"len={self.player.get_length()} direct={cur in self._direct_keys}")
+        except Exception:
+            pass
         self._req_t = _time.monotonic()
         if is_online(cur):
             try:
@@ -1672,6 +1717,14 @@ class MusicPlayer(QMainWindow):
                 self._retried.add(cur)
                 self.toast_msg("Connection lost - reconnecting…", 2000)
                 online.forget(cur)
+                if cur in self._direct_keys:             # try the other way: with / without the local proxy
+                    self._direct_keys.discard(cur)
+                else:
+                    self._direct_keys.add(cur)
+                    del_extra = len(self._direct_keys) - 200
+                    if del_extra > 0:
+                        self._direct_keys.clear()
+                        self._direct_keys.add(cur)
                 self.play_stream(cur, push=False, start_ms=pos)
                 return
             cycles = self._net_cycles.get(cur, 0)
@@ -2148,7 +2201,7 @@ class MusicPlayer(QMainWindow):
             idx = self.queue_paths.index(self.current_path)
         except ValueError:
             return
-        for p in self.queue_paths[idx + 1: idx + 3]:
+        for p in self.queue_paths[idx + 1: idx + 4]:
             item = self.online_items.get(p) if is_online(p) else None
             if item:
                 self.jobs.prefetch(item)
@@ -2164,6 +2217,8 @@ class MusicPlayer(QMainWindow):
         if key not in self.queue_paths:
             self._set_queue([key], None)
         self._req_t = 0.0
+        if not start_ms:
+            self._early_ends.pop(key, None)
         self._pending_seek = int(start_ms) if start_ms and start_ms > 1500 else None
         self._taste_finish()
         self._listen_acc = 0.0
@@ -2224,7 +2279,8 @@ class MusicPlayer(QMainWindow):
         play_url = url
         try:                                           # one buffered download shared by the player and the waves
             item0 = self.online_items.get(key)
-            play_url = self.hub.start(key, url, refresh=(lambda it=item0: self._fresh_url(it)) if item0 else None)
+            if key not in self._direct_keys:
+                play_url = self.hub.start(key, url, refresh=(lambda it=item0: self._fresh_url(it)) if item0 else None)
         except Exception:
             play_url = url
         local_proxy = play_url != url
@@ -2289,7 +2345,7 @@ class MusicPlayer(QMainWindow):
             idx = self.queue_paths.index(self.current_path)
         except ValueError:
             return
-        if key in self.queue_paths[idx + 1: idx + 3] and key != self.current_path:
+        if key in self.queue_paths[idx + 1: idx + 4] and key != self.current_path:
             item = self.online_items.get(key)
             if item:
                 try:
@@ -2702,10 +2758,32 @@ class MusicPlayer(QMainWindow):
         if not ents:
             self.toast_msg("This playlist is empty", 1800)
             return
-        QApplication.clipboard().setText(playlist_share.to_code(name, ents))
-        notice(self, "Share code copied",
-               f"The code of “{name}” is in your clipboard.\nSend it to a friend (WhatsApp, Telegram, anywhere). "
-               "They open NILKON, press + next to Playlists and choose “Import from a share code”.", "link")
+        if getattr(self, "_sharing", False):
+            return
+        self._sharing = True
+        long_code = playlist_share.to_code(name, ents)
+        self.toast_msg("Making the share code…", 4000)
+
+        def finish(short):
+            self._sharing = False
+            code = short or long_code
+            QApplication.clipboard().setText(code)
+            if short:
+                notice(self, "Share code copied",
+                       f"The code of “{name}” ({short}) is in your clipboard.\nSend it to a friend (WhatsApp, Telegram, "
+                       "anywhere). They open NILKON, press + next to Playlists and choose “Import from a share code”.", "link")
+            else:
+                notice(self, "Share code copied",
+                       f"The code of “{name}” is in your clipboard. It is long because the short-code service could not "
+                       "be reached just now - it works the same. You can also use “Save as file” and send the file.", "link")
+
+        def work():
+            try:
+                short = playlist_share.upload_short(long_code)
+            except Exception:
+                short = ""
+            self._mb.post(finish, short)
+        threading.Thread(target=work, daemon=True, name="nilkon-share").start()
 
     def share_playlist_file(self, name):
         import playlist_share
@@ -2742,15 +2820,37 @@ class MusicPlayer(QMainWindow):
     def import_playlist_code(self):
         import playlist_share
         text, ok = ask_text(self, "Import from a share code", "Paste the NILKON share code you received.",
-                            placeholder="NILKON-PL1:…", ok_text="Import", icon="link", max_len=200000)
+                            placeholder="NKP1-…", ok_text="Import", icon="link", max_len=200000)
         if not ok:
             return
-        try:
-            name, entries = playlist_share.parse_code(text)
-        except playlist_share.ImportError_ as exc:
-            notice(self, "Couldn't import", str(exc))
+        short = playlist_share.find_short(text)
+        if short is None:
+            try:
+                name, entries = playlist_share.parse_code(text)
+            except playlist_share.ImportError_ as exc:
+                notice(self, "Couldn't import", str(exc))
+                return
+            self._start_import(name, entries)
             return
-        self._start_import(name, entries)
+        self.toast_msg("Getting the playlist…", 4000)
+
+        def done(err, name, entries):
+            if err:
+                notice(self, "Couldn't import", err)
+            else:
+                self._start_import(name, entries)
+
+        def work():
+            try:
+                name, entries = playlist_share.parse_code(playlist_share.fetch_short(*short))
+            except playlist_share.ImportError_ as exc:
+                self._mb.post(done, str(exc), "", [])
+                return
+            except Exception:
+                self._mb.post(done, "The playlist could not be downloaded.", "", [])
+                return
+            self._mb.post(done, "", name, entries)
+        threading.Thread(target=work, daemon=True, name="nilkon-import").start()
 
     def _start_import(self, name, entries):
         self._import_token = self.jobs.import_entries(name, entries)
@@ -3218,6 +3318,7 @@ def main(app=None, splash=None):
                              "install VLC (64-bit) from https://www.videolan.org/vlc/ and restart NILKON.\n\n"
                              f"Technical details: {VLC_ERROR}")
         return 1
+    _SPLASH[0] = splash
     try:
         window = MusicPlayer()
     except Exception as exc:
@@ -3228,7 +3329,9 @@ def main(app=None, splash=None):
                              f"Technical details: {exc}")
         raise
     window.show()
+    _SPLASH[0] = None
     if splash is not None:
+        splash.set_progress(1.0, "Ready")
         splash.finish(window)
     return app.exec()
 

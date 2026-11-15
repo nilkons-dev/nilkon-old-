@@ -1,40 +1,44 @@
-"""Start-up file of the installed app: a small splash screen appears at once, then the player loads behind it."""
+"""Start-up file of the installed app: the splash screen (animated logo + loading bar) appears at once, then the player
+is loaded behind it, step by step, so the bar really moves."""
 import sys
-from pathlib import Path
-
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
-from PySide6.QtWidgets import QApplication, QSplashScreen
 
 
-def _splash():
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "assets"
-    pm = QPixmap(420, 240)
-    pm.fill(QColor(11, 13, 19))
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-    p.setPen(QColor(255, 255, 255, 30))
-    p.drawRect(0, 0, 419, 239)
-    for name in ("logo_app.png", "logo.png"):
-        f = base / name
-        if f.is_file():
-            logo = QPixmap(str(f)).scaledToWidth(210, Qt.TransformationMode.SmoothTransformation)
-            p.drawPixmap((420 - logo.width()) // 2, 36, logo)
-            break
-    p.setPen(QColor(255, 255, 255, 150))
-    f = QFont()
-    f.setPixelSize(12)
-    p.setFont(f)
-    p.drawText(pm.rect().adjusted(0, 0, 0, -22), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, "Starting…")
-    p.end()
-    return QSplashScreen(pm, Qt.WindowType.WindowStaysOnTopHint)
+def _load(app, splash):
+    steps = (("vlc_boot", "Starting the sound engine…", 0.10),
+             ("theme", "Loading the look…", 0.18),
+             ("library", "Reading your library…", 0.28),
+             ("online", "Preparing online music…", 0.38),
+             ("widgets", "Building the interface…", 0.50),
+             ("panels", "Building the interface…", 0.60),
+             ("tracklist", "Building the interface…", 0.68),
+             ("home", "Building the interface…", 0.76),
+             ("online_page", "Building the interface…", 0.82),
+             ("settings_dialog", "Building the interface…", 0.88),
+             ("music_player", "Almost ready…", 0.94))
+    for name, text, value in steps:
+        splash.set_progress(value, text)
+        app.processEvents()
+        try:
+            __import__(name)
+        except Exception:
+            if name == "vlc_boot":                  # reported nicely later by music_player.main
+                continue
+            raise
+    splash.set_progress(0.97, "Almost ready…")
+    app.processEvents()
 
 
 if __name__ == "__main__":
+    from PySide6.QtWidgets import QApplication
     app = QApplication(sys.argv)
-    splash = _splash()
+    from splash_screen import Splash
+    splash = Splash()
     splash.show()
     app.processEvents()
-    import music_player                      # the heavy part - the splash is already on screen
+    try:
+        _load(app, splash)
+    except Exception:
+        splash.close()
+        raise
+    import music_player
     sys.exit(music_player.main(app, splash))
