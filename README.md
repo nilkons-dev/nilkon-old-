@@ -59,6 +59,9 @@ Data is stored in `~/.nilkon_music`. Renaming a song changes its display name on
 - Waves for local and online songs start within a fraction of a second (progressive analysis) and no longer jump when the analysis completes.
 - Buttons, sliders and menus now follow the song colours.
 
+## 1.13.3 - build fix
+- Fixed the Windows build (build_release.py: prune_app was missing).
+
 ## 1.13.2 - checks
 - Full code review: start-up errors raised while the window is shown are now caught and reported nicely too;
   the Snap Layouts hover state can no longer stay stuck when the mouse leaves the maximise button.

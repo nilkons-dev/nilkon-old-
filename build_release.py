@@ -37,6 +37,25 @@ def sign(path: Path) -> None:
     print("signed:", path.name)
 
 
+def prune_app(folder: Path) -> None:
+    """Fewer files = a faster first start (Windows Defender checks every file the first time it is loaded)."""
+    removed = 0
+    for pattern in ("opengl32sw.dll", "Qt6Pdf*.dll", "Qt6Quick*.dll", "Qt6Qml*.dll", "Qt6VirtualKeyboard*.dll",
+                    "Qt6Designer*.dll", "Qt6Test*.dll"):
+        for f in folder.rglob(pattern):
+            try:
+                f.unlink()
+                removed += 1
+            except OSError:
+                pass
+    for name in ("translations", "qml"):
+        for d in list(folder.rglob(name)):
+            if d.is_dir() and "PySide6" in d.parts:
+                shutil.rmtree(d, ignore_errors=True)
+                removed += 1
+    print("Pruned", removed, "unused files")
+
+
 def main() -> None:
     vlc_dir = find_vlc()
     bundle = ROOT / "vlc_bundle"
@@ -79,7 +98,10 @@ def main() -> None:
     if not exe.exists():
         sys.exit("Build failed: NILKON.exe was not created.")
     print("App built:", exe)
-    prune_app(exe.parent)
+    try:
+        prune_app(exe.parent)
+    except Exception as exc:                      # pruning is only an optimisation
+        print("Pruning skipped:", exc)
     sign(exe)
 
     iscc = shutil.which("iscc") or next((p for p in (r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
