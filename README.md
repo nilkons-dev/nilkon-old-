@@ -59,6 +59,10 @@ Data is stored in `~/.nilkon_music`. Renaming a song changes its display name on
 - Waves for local and online songs start within a fraction of a second (progressive analysis) and no longer jump when the analysis completes.
 - Buttons, sliders and menus now follow the song colours.
 
+## 1.13.2 - checks
+- Full code review: start-up errors raised while the window is shown are now caught and reported nicely too;
+  the Snap Layouts hover state can no longer stay stuck when the mouse leaves the maximise button.
+
 ## 1.13.1 - fix
 - Fixed: "NILKON could not start ... PosterBand has no attribute _timers" (poster strip on Explore).
 - Faster start: slow non-Qt modules (numpy, audio analysis, tags, stream proxy ...) load in the background while the window

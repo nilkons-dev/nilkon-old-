@@ -3,7 +3,7 @@
 Drag the bar to move the window (Windows snap works), double-click to maximise / restore, right-click for the window
 menu. The colours follow the player theme, so the bar always matches the song colours and dark / light mode.
 """
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QMenu, QWidget
 
@@ -26,6 +26,9 @@ class TitleBar(QWidget):
         self._title = ""
         self._hover = -1               # 0 minimise, 1 maximise, 2 close
         self._down = -1
+        self._snap_poll = QTimer(self)               # notices when the mouse left the maximise button (Snap Layouts)
+        self._snap_poll.setInterval(120)
+        self._snap_poll.timeout.connect(self._snap_check)
         self.setFixedHeight(BAR_H)
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.ArrowCursor)
@@ -58,6 +61,15 @@ class TitleBar(QWidget):
         if h != self._hover or d != self._down:
             self._hover, self._down = h, d
             self.update()
+        if on and not self._snap_poll.isActive():
+            self._snap_poll.start()
+        elif not on:
+            self._snap_poll.stop()
+
+    def _snap_check(self):
+        p = self.mapFromGlobal(QCursor.pos())
+        if not self.maximize_rect().contains(QPointF(p)):
+            self.set_snap_hover(False)
 
     def _button_at(self, pos):
         rects, _ = self._button_rects()

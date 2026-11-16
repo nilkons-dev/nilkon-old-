@@ -3364,6 +3364,7 @@ def main(app=None, splash=None):
     _SPLASH[0] = splash
     try:
         window = MusicPlayer()
+        window.show()
     except Exception as exc:
         if splash is not None:
             splash.close()
@@ -3371,7 +3372,6 @@ def main(app=None, splash=None):
                              "Something went wrong while starting the player.\n\n"
                              f"Technical details: {exc}")
         raise
-    window.show()
     _SPLASH[0] = None
     if splash is not None:
         splash.set_progress(1.0, "Ready")
